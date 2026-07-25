@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bitwarden Secrets Manager CLI"
+  short_description: "Use Bitwarden Secrets Manager safely"
+  default_prompt: "Use $bitwarden-secrets-manager-cli to retrieve and inject secrets safely with bws."
