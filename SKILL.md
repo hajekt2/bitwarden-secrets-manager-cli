@@ -16,9 +16,13 @@ Install it when missing, authenticate without exposing the access token, inspect
 3. Determine the server before authenticating.
    Bitwarden US is the default.
    Configure EU or self-hosted deployments only when the user identifies that environment.
-4. Use an existing `BWS_ACCESS_TOKEN` environment variable.
-   If none exists, ask the user to inject or export the token in their own secure environment.
-5. Run `scripts/check-auth.sh` to perform a read-only authentication check that emits no vault data.
+4. Run authenticated commands through `scripts/with-bws-token.sh`.
+   It uses an existing `BWS_ACCESS_TOKEN` first.
+   On Linux, when the variable is absent, it tries the user keyring entry identified by `service bws account access-token`.
+5. If neither source provides a token, ask the user to inject it securely.
+   On an Ubuntu user session, guide the user through the Linux keyring setup in [references/cli-guide.md](references/cli-guide.md).
+   Do not ask the user to paste the token into chat.
+6. Run `scripts/check-auth.sh` to perform a read-only authentication check that emits no vault data.
 
 Read [references/cli-guide.md](references/cli-guide.md) for command syntax, output behavior, configuration, and troubleshooting.
 Use the live `bws <command> --help` output and linked official Bitwarden documentation as the final authority.
@@ -30,6 +34,16 @@ Use the live `bws <command> --help` output and linked official Bitwarden documen
   Command arguments can appear in shell history, process listings, logs, and agent traces.
 - Prefer runtime secret injection or an already-set `BWS_ACCESS_TOKEN`.
   If secure injection is unavailable, ask the user to export it in their own shell and confirm when ready.
+- On Linux user sessions, prefer the keyring entry `service bws account access-token`.
+  Retrieve it through `scripts/with-bws-token.sh` or capture it without printing:
+
+  ```bash
+  export BWS_ACCESS_TOKEN="$(secret-tool lookup service bws account access-token)"
+  ```
+
+- Disable shell tracing before retrieving credentials.
+  Never run `echo "$BWS_ACCESS_TOKEN"` or otherwise verify a token by printing it.
+- Do not assume `secret-tool` works for a pure system service or a headless session without an available and unlocked keyring.
 - Do not create `.env` files unless the user explicitly asks.
   If one is required, keep it outside version control, restrict permissions, and verify that Git ignores it.
 - Do not expose raw `bws secret list` or `bws secret get` JSON in logs because both include secret values.
@@ -45,7 +59,7 @@ Recommend rotation if it was exposed in a durable or public location.
 Resolve the exact organization-visible objects before changing anything:
 
 ```bash
-bws project list --output table
+scripts/with-bws-token.sh bws project list --output table
 scripts/list-secret-metadata.sh
 scripts/list-secret-metadata.sh "$PROJECT_ID"
 ```
@@ -56,7 +70,7 @@ The metadata helper deliberately removes each secret's value and note before pri
 For a specific value, avoid rendering it:
 
 ```bash
-SECRET_VALUE="$(bws secret get "$SECRET_ID" --output json | jq -r '.value')"
+SECRET_VALUE="$(scripts/with-bws-token.sh bws secret get "$SECRET_ID" --output json | jq -r '.value')"
 export SECRET_VALUE
 trusted-command-reading-env
 unset SECRET_VALUE
@@ -70,13 +84,13 @@ Adapt it so the trusted destination consumes the variable, and ensure shell trac
 Use `bws run` when secret keys are valid environment-variable names:
 
 ```bash
-bws run --project-id "$PROJECT_ID" -- trusted-command
+scripts/with-bws-token.sh bws run --project-id "$PROJECT_ID" -- trusted-command
 ```
 
 Use `--no-inherit-env` when the child should receive a minimal inherited environment:
 
 ```bash
-bws run --project-id "$PROJECT_ID" --no-inherit-env -- trusted-command
+scripts/with-bws-token.sh bws run --project-id "$PROJECT_ID" --no-inherit-env -- trusted-command
 ```
 
 Treat `--no-inherit-env` as environment cleanup, not a sandbox.
@@ -96,10 +110,10 @@ Before create, edit, or delete operations:
 Examples:
 
 ```bash
-bws project create "$PROJECT_NAME" --output none
-bws project edit "$PROJECT_ID" --name "$NEW_NAME" --output none
-bws secret create "$SECRET_KEY" "$SECRET_VALUE" "$PROJECT_ID" --output none
-bws secret edit "$SECRET_ID" --value "$SECRET_VALUE" --output none
+scripts/with-bws-token.sh bws project create "$PROJECT_NAME" --output none
+scripts/with-bws-token.sh bws project edit "$PROJECT_ID" --name "$NEW_NAME" --output none
+scripts/with-bws-token.sh bws secret create "$SECRET_KEY" "$SECRET_VALUE" "$PROJECT_ID" --output none
+scripts/with-bws-token.sh bws secret edit "$SECRET_ID" --value "$SECRET_VALUE" --output none
 ```
 
 Deletion is destructive.

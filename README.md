@@ -50,7 +50,7 @@ See the [Skills CLI documentation](https://github.com/vercel-labs/skills) for su
 
 - Installs `bws` from Bitwarden's official installer when the CLI is missing.
 - Supports Bitwarden US, Bitwarden EU, and self-hosted server configuration.
-- Authenticates through the `BWS_ACCESS_TOKEN` environment variable.
+- Authenticates through an existing `BWS_ACCESS_TOKEN` or a Linux user keyring entry.
 - Validates authentication with a read-only request that prints no vault data.
 - Lists secret metadata without printing secret values or notes.
 - Retrieves and injects secrets without exposing them in agent output.
@@ -74,6 +74,44 @@ export BWS_ACCESS_TOKEN
 
 Use your shell, CI secret store, agent runtime, or another secure environment-injection mechanism to set the value.
 Do not paste the token into prompts, commit it, store it in tracked `.env` files, or pass it through the `--access-token` command-line option.
+
+### Linux keyring
+
+On Ubuntu, an interactive user session can store the machine-account token in the Linux keyring instead of a shell profile or plaintext file.
+Install the required tools if they are missing:
+
+```bash
+sudo apt install libsecret-tools gnome-keyring
+```
+
+Store the token under the attributes expected by the skill:
+
+```bash
+secret-tool store \
+  --label="Bitwarden Secrets Manager" \
+  service bws \
+  account access-token
+```
+
+`secret-tool` prompts for the value.
+Enter it interactively rather than placing it on the command line.
+
+Retrieve it later without printing it:
+
+```bash
+export BWS_ACCESS_TOKEN="$(secret-tool lookup service bws account access-token)"
+```
+
+The skill normally uses the bundled wrapper, which first honors an existing environment variable and then tries this keyring entry:
+
+```bash
+scripts/with-bws-token.sh bws project list --output none
+```
+
+Keep shell tracing disabled and never verify the token with `echo`.
+This approach expects an available and unlocked user keyring.
+It is not a reliable default for a pure system service or a headless process without a user D-Bus and keyring session.
+Use the service manager or deployment platform's secret-injection mechanism in those environments.
 
 The skill validates authentication with:
 
@@ -127,7 +165,8 @@ Agents can also invoke the skill automatically when a request mentions Bitwarden
 └── scripts/
     ├── check-auth.sh
     ├── ensure-bws.sh
-    └── list-secret-metadata.sh
+    ├── list-secret-metadata.sh
+    └── with-bws-token.sh
 ```
 
 - [`SKILL.md`](SKILL.md) contains the agent workflow and safety rules.
@@ -135,6 +174,7 @@ Agents can also invoke the skill automatically when a request mentions Bitwarden
 - [`scripts/ensure-bws.sh`](scripts/ensure-bws.sh) detects or installs the official `bws` CLI on Linux and macOS.
 - [`scripts/check-auth.sh`](scripts/check-auth.sh) validates authentication without printing vault data.
 - [`scripts/list-secret-metadata.sh`](scripts/list-secret-metadata.sh) strips values and notes from secret-list output.
+- [`scripts/with-bws-token.sh`](scripts/with-bws-token.sh) loads the token from the environment or Linux keyring and runs a command without printing the token.
 
 On native Windows, the skill uses Bitwarden's official PowerShell installer.
 
