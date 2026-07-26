@@ -48,7 +48,8 @@ Use the live `bws <command> --help` output and linked official Bitwarden documen
   If one is required, keep it outside version control, restrict permissions, and verify that Git ignores it.
 - Do not expose raw `bws secret list` or `bws secret get` JSON in logs because both include secret values.
 - Use `scripts/list-secret-metadata.sh [PROJECT_ID]` when only IDs and keys are needed.
-- Prefer `bws run` to pass values directly to a trusted process instead of retrieving and displaying them.
+- Prefer a purpose-built single-secret helper over `bws run`.
+  `bws run` exposes every secret in the selected project to a shell and is an advanced, high-risk operation.
 - Use `--output none` for mutations unless returned metadata is required.
 
 If a token appears in conversation or tool output, do not echo it.
@@ -67,35 +68,56 @@ scripts/list-secret-metadata.sh "$PROJECT_ID"
 Listing projects does not expose secret values.
 The metadata helper deliberately removes each secret's value and note before printing.
 
-For a specific value, avoid rendering it:
+For a specific value, retrieve it by UUID and avoid rendering it:
 
 ```bash
-SECRET_VALUE="$(scripts/with-bws-token.sh bws secret get "$SECRET_ID" --output json | jq -r '.value')"
-export SECRET_VALUE
-trusted-command-reading-env
-unset SECRET_VALUE
+task_secret_value="$(
+  scripts/with-bws-token.sh bws secret get "$SECRET_ID" --output json |
+    jq -er '.value | select(type == "string" and length > 0)'
+)"
+trap 'unset task_secret_value' EXIT HUP INT TERM
+printf '%s' "$task_secret_value" | trusted-command-reading-stdin
+unset task_secret_value
+trap - EXIT HUP INT TERM
 ```
 
 Do not run the example unchanged.
 Adapt it so the trusted destination consumes the variable, and ensure shell tracing is disabled.
+Do not pass the value as a command argument.
 
-## Inject secrets into a trusted process
-
-Use `bws run` when secret keys are valid environment-variable names:
-
-```bash
-scripts/with-bws-token.sh bws run --project-id "$PROJECT_ID" -- trusted-command
-```
-
-Use `--no-inherit-env` when the child should receive a minimal inherited environment:
+For Vercel, use the bundled single-secret synchronizer:
 
 ```bash
-scripts/with-bws-token.sh bws run --project-id "$PROJECT_ID" --no-inherit-env -- trusted-command
+scripts/sync-secret-to-vercel.py \
+  "$SECRET_ID" \
+  RESEND_API_KEY \
+  production
 ```
 
-Treat `--no-inherit-env` as environment cleanup, not a sandbox.
-Execute only binaries and scripts the user trusts because the child process receives the secrets.
-Use `--uuids-as-keynames` when secret names are not POSIX-compatible or may collide.
+The helper retrieves exactly one secret by UUID, validates it in process memory, passes it to `vercel env add` through standard input, suppresses child output, and reports only the variable name and target.
+Add `--git-branch BRANCH` only for a branch-scoped Preview variable.
+
+## Advanced: run a process with project secrets
+
+Treat `bws run` as an exceptional, high-risk operation.
+It does not preserve an argument vector.
+It joins the supplied arguments into one string and executes that string through a shell.
+Quoting that looks safe at the calling shell can therefore be lost or reinterpreted.
+
+Never call `bws run` directly from an agent operation.
+Use the guarded wrapper:
+
+```bash
+scripts/safe-bws-run.sh "$PROJECT_ID" vercel deploy
+```
+
+The wrapper always uses `--no-inherit-env`, resolves the executable before launching `bws`, restricts commands to a narrow allowlist, and accepts only shell-safe argument tokens.
+It rejects shells, interpreters, environment-dump commands, `-c` command strings, whitespace, control characters, and shell metacharacters.
+Do not bypass the wrapper with nested `sh -c`, `bash -c`, PowerShell command strings, semicolons, newlines, command substitutions, `set`, `env`, `printenv`, or `export -p`.
+
+`--no-inherit-env` reduces exposure of unrelated credentials but is not a sandbox.
+The child still receives every accessible secret in the selected project.
+Use the single-secret path whenever the destination needs only one value.
 
 ## Change projects or secrets
 

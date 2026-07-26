@@ -89,7 +89,6 @@ For agent commands, use the bundled wrapper so the token does not depend on shel
 
 ```bash
 scripts/with-bws-token.sh bws project list --output none
-scripts/with-bws-token.sh bws run --project-id "$PROJECT_ID" -- trusted-command
 ```
 
 The wrapper first uses an existing non-empty `BWS_ACCESS_TOKEN`.
@@ -173,21 +172,56 @@ scripts/with-bws-token.sh bws secret delete "$SECRET_ID"
 Secret read responses contain decrypted values.
 Secret values passed to create or edit are command arguments, so keep shell tracing disabled and avoid literal values in command history.
 
-## Run a process with secrets
+## Copy one secret to Vercel
+
+Prefer the single-secret synchronizer when a Vercel environment variable needs one Bitwarden value:
+
+```bash
+scripts/sync-secret-to-vercel.py \
+  "$SECRET_ID" \
+  RESEND_API_KEY \
+  production
+```
+
+The helper retrieves exactly one secret by UUID.
+It validates the value in process memory and sends it to `vercel env add` through standard input.
+It suppresses `bws` and Vercel child output and reports only the variable name and target.
+It uses `--force` and `--yes`, so invoke it only after resolving the exact Vercel project, variable name, and target.
+
+Use a branch-scoped Preview variable only when required:
+
+```bash
+scripts/sync-secret-to-vercel.py \
+  "$SECRET_ID" \
+  RESEND_API_KEY \
+  preview \
+  --git-branch feature/contact
+```
+
+The helper requires Python 3, `bws`, and the Vercel CLI.
+Run it from the linked Vercel project directory.
+It does not pass the secret through command arguments or `bws run`.
+
+## Advanced: run a process with project secrets
 
 `bws run` injects accessible secrets as environment variables into a child process:
 
 ```bash
-scripts/with-bws-token.sh bws run --project-id "$PROJECT_ID" -- trusted-command
-scripts/with-bws-token.sh bws run --project-id "$PROJECT_ID" --no-inherit-env -- trusted-command
-scripts/with-bws-token.sh bws run --project-id "$PROJECT_ID" --uuids-as-keynames -- trusted-command
+scripts/safe-bws-run.sh "$PROJECT_ID" vercel deploy
 ```
 
+Treat this as an exceptional, high-risk operation.
+The `bws` implementation joins the command arguments into one string and executes that string through the configured shell.
+It does not preserve the original argument vector.
 The default shell is `sh` on Linux and macOS and PowerShell on Windows.
+
+The guarded wrapper always sets `--no-inherit-env`, resolves the executable to an absolute path, uses a narrow executable allowlist, and rejects tokens that the shell could reinterpret.
+Do not call `bws run` directly from an agent operation.
+Do not use nested shells, interpreters, `-c`, command substitutions, shell control operators, `set`, `env`, `printenv`, or `export -p`.
+
 `--no-inherit-env` reduces inherited variables but does not sandbox the child.
-Run only trusted code.
-Secret names that are invalid environment-variable names may be inaccessible to POSIX tools.
-`--uuids-as-keynames` converts secret IDs to safe environment-variable names.
+The child still receives every accessible secret in the selected project.
+Prefer a purpose-built single-secret helper whenever the destination needs only one value.
 
 ## Troubleshoot
 

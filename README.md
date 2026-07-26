@@ -53,9 +53,10 @@ See the [Skills CLI documentation](https://github.com/vercel-labs/skills) for su
 - Authenticates through an existing `BWS_ACCESS_TOKEN` or a Linux user keyring entry.
 - Validates authentication with a read-only request that prints no vault data.
 - Lists secret metadata without printing secret values or notes.
-- Retrieves and injects secrets without exposing them in agent output.
+- Retrieves individual secrets by UUID without exposing them in agent output.
+- Synchronizes one Bitwarden secret to a Vercel environment variable through standard input.
 - Guides safe project and secret creation, editing, and deletion.
-- Uses `bws run` to inject secrets directly into trusted processes.
+- Guards exceptional `bws run` operations with a narrow command allowlist and mandatory environment cleanup.
 - Uses live `bws --help` output and Bitwarden documentation as the final authority.
 
 ## Authentication
@@ -133,7 +134,7 @@ Use $bitwarden-secrets-manager-cli to list the secret IDs and keys available to 
 ```
 
 ```text
-Use $bitwarden-secrets-manager-cli to run npm start with secrets from project <PROJECT_ID>.
+Use $bitwarden-secrets-manager-cli to copy secret <SECRET_ID> to Vercel variable RESEND_API_KEY in production without displaying the value.
 ```
 
 ```text
@@ -150,8 +151,10 @@ Agents can also invoke the skill automatically when a request mentions Bitwarden
 - Use `--output none` for mutations unless response metadata is required.
 - Resolve exact resource IDs before editing or deleting anything.
 - Require explicit authorization before deleting projects or secrets.
-- Run only trusted commands through `bws run` because the child process receives secret values.
-- Treat `--no-inherit-env` as environment cleanup, not as a security sandbox.
+- Prefer the single-secret Vercel helper over exposing an entire project through `bws run`.
+- Treat `bws run` as an exceptional, high-risk operation because it constructs a shell command string.
+- Use only the guarded wrapper, which requires `--no-inherit-env` and rejects unsafe command forms.
+- Treat environment cleanup as blast-radius reduction, not as a security sandbox.
 
 ## Repository contents
 
@@ -166,6 +169,8 @@ Agents can also invoke the skill automatically when a request mentions Bitwarden
     ├── check-auth.sh
     ├── ensure-bws.sh
     ├── list-secret-metadata.sh
+    ├── safe-bws-run.sh
+    ├── sync-secret-to-vercel.py
     └── with-bws-token.sh
 ```
 
@@ -174,6 +179,8 @@ Agents can also invoke the skill automatically when a request mentions Bitwarden
 - [`scripts/ensure-bws.sh`](scripts/ensure-bws.sh) detects or installs the official `bws` CLI on Linux and macOS.
 - [`scripts/check-auth.sh`](scripts/check-auth.sh) validates authentication without printing vault data.
 - [`scripts/list-secret-metadata.sh`](scripts/list-secret-metadata.sh) strips values and notes from secret-list output.
+- [`scripts/safe-bws-run.sh`](scripts/safe-bws-run.sh) constrains exceptional `bws run` operations to a narrow, shell-safe command surface.
+- [`scripts/sync-secret-to-vercel.py`](scripts/sync-secret-to-vercel.py) copies exactly one Bitwarden secret to Vercel through standard input.
 - [`scripts/with-bws-token.sh`](scripts/with-bws-token.sh) loads the token from the environment or Linux keyring and runs a command without printing the token.
 
 On native Windows, the skill uses Bitwarden's official PowerShell installer.
