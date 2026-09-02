@@ -1,159 +1,103 @@
 ---
 name: bitwarden-secrets-manager-cli
-description: Operate Bitwarden Secrets Manager through the `bws` CLI, including installing the CLI when missing, authenticating with machine-account access tokens, configuring US, EU, or self-hosted servers, listing and managing projects and secrets, and injecting secrets into trusted processes. Use for requests involving Bitwarden Secrets Manager, `bws`, `BWS_ACCESS_TOKEN`, machine accounts, secret retrieval, secret injection, or Secrets Manager automation and CI/CD.
+description: Check Bitwarden Secrets Manager access and run approved operations without returning credentials. Use for bws, machine-account access, secret injection, and Bitwarden automation. Secret listing, raw retrieval, and generic command execution are prohibited.
 ---
 
-# Bitwarden Secrets Manager CLI
+# Bitwarden Secrets Manager
 
-Use `bws` with secret-safe defaults.
-Install it when missing, authenticate without exposing the access token, inspect read-only state first, and make mutations only when the requested scope is exact.
+Request work, never credentials. Return only the approved operation's result.
+Do not print or return tokens or secret values through stdout, stderr, errors,
+logs, tool responses, chat, or files readable by the agent.
 
-## Start every task
+## Available operations
 
-1. Run `scripts/ensure-bws.sh`.
-   On native Windows without a POSIX shell, use the official PowerShell installer documented in [references/cli-guide.md](references/cli-guide.md).
-2. Run `bws --version` and `bws --help` when command behavior may vary by version.
-3. Determine the server before authenticating.
-   Bitwarden US is the default.
-   Configure EU or self-hosted deployments only when the user identifies that environment.
-4. Run authenticated commands through `scripts/with-bws-token.sh`.
-   It uses an existing `BWS_ACCESS_TOKEN` first.
-   On Linux, when the variable is absent, it tries the user keyring entry identified by `service bws account access-token`.
-5. If neither source provides a token, ask the user to inject it securely.
-   On an Ubuntu user session, guide the user through the Linux keyring setup in [references/cli-guide.md](references/cli-guide.md).
-   Do not ask the user to paste the token into chat.
-6. Run `scripts/check-auth.sh` to perform a read-only authentication check that emits no vault data.
-
-Read [references/cli-guide.md](references/cli-guide.md) for command syntax, output behavior, configuration, and troubleshooting.
-Use the live `bws <command> --help` output and linked official Bitwarden documentation as the final authority.
-
-## Protect credentials and secret values
-
-- Never print, repeat, summarize, or commit an access token or secret value.
-- Never place an access token directly in a command line with `--access-token`.
-  Command arguments can appear in shell history, process listings, logs, and agent traces.
-- Prefer runtime secret injection or an already-set `BWS_ACCESS_TOKEN`.
-  If secure injection is unavailable, ask the user to export it in their own shell and confirm when ready.
-- On Linux user sessions, prefer the keyring entry `service bws account access-token`.
-  Retrieve it through `scripts/with-bws-token.sh` or capture it without printing:
-
-  ```bash
-  export BWS_ACCESS_TOKEN="$(secret-tool lookup service bws account access-token)"
-  ```
-
-- Disable shell tracing before retrieving credentials.
-  Never run `echo "$BWS_ACCESS_TOKEN"` or otherwise verify a token by printing it.
-- Do not assume `secret-tool` works for a pure system service or a headless session without an available and unlocked keyring.
-- Do not create `.env` files unless the user explicitly asks.
-  If one is required, keep it outside version control, restrict permissions, and verify that Git ignores it.
-- Do not expose raw `bws secret list` or `bws secret get` JSON in logs because both include secret values.
-- Use `scripts/list-secret-metadata.sh [PROJECT_ID]` when only IDs and keys are needed.
-- Prefer a purpose-built single-secret helper over `bws run`.
-  `bws run` exposes every secret in the selected project to a shell and is an advanced, high-risk operation.
-- Use `--output none` for mutations unless returned metadata is required.
-
-If a token appears in conversation or tool output, do not echo it.
-Recommend rotation if it was exposed in a durable or public location.
-
-## Work read-only first
-
-Resolve the exact organization-visible objects before changing anything:
+Use the bundled operation wrapper on Linux:
 
 ```bash
+scripts/with-bws-token.sh check-auth
+scripts/with-bws-token.sh projects
+```
+
+- `check-auth` makes a read-only project request and returns a fixed status.
+- `projects` returns only project IDs and names as JSON.
+- `scripts/check-auth.sh` is an alias for the authentication operation.
+
+The wrapper rejects all other operations before reading the keyring. It accepts
+only these two exact legacy forms for compatibility:
+
+```bash
+scripts/with-bws-token.sh bws project list --output none
 scripts/with-bws-token.sh bws project list --output table
-scripts/list-secret-metadata.sh
-scripts/list-secret-metadata.sh "$PROJECT_ID"
 ```
 
-Listing projects does not expose secret values.
-The metadata helper deliberately removes each secret's value and note before printing.
+The legacy `table` form now returns the same selected JSON metadata as `projects`.
 
-For a specific value, retrieve it by UUID and avoid rendering it:
+## Prohibited paths
 
-```bash
-task_secret_value="$(
-  scripts/with-bws-token.sh bws secret get "$SECRET_ID" --output json |
-    jq -er '.value | select(type == "string" and length > 0)'
-)"
-trap 'unset task_secret_value' EXIT HUP INT TERM
-printf '%s' "$task_secret_value" | trusted-command-reading-stdin
-unset task_secret_value
-trap - EXIT HUP INT TERM
-```
+- Never invoke raw `bws` from an agent, including by absolute path or another interpreter.
+- Reject `bws secret list`, including metadata-filtered and `--output none` forms.
+  Piping a bulk secret response through `jq` still retrieves every value.
+- Reject raw `bws secret get`. A helper returning one secret at a time still
+  allows enumeration and exposes the value to the model.
+- Reject `bws run` and arbitrary commands, shells, scripts, executable paths,
+  environment dumps, config flags, and server overrides supplied to the wrapper.
+- Never export `BWS_ACCESS_TOKEN` into the agent, parent shell, shell profile,
+  or global environment. The wrapper rejects an inherited non-empty token.
+- Never use the old `list-secret-metadata.sh`, `safe-bws-run.sh`, or
+  `sync-secret-to-vercel.py` interfaces. They fail closed without credential lookup.
+  The old Vercel interface accepted arbitrary secret IDs and destinations.
 
-Do not run the example unchanged.
-Adapt it so the trusted destination consumes the variable, and ensure shell tracing is disabled.
-Do not pass the value as a command argument.
+## Credential handling
 
-For Vercel, use the bundled single-secret synchronizer:
+The machine-account access token stays in the Linux keyring under
+`service bws account access-token`. The wrapper reads it internally with
+`/usr/bin/secret-tool` and passes it only to the fixed `bws` child environment.
+It never writes it to `os.environ` or forwards it to another command.
 
-```bash
-scripts/sync-secret-to-vercel.py \
-  "$SECRET_ID" \
-  RESEND_API_KEY \
-  production
-```
+`bws` is resolved from known installation locations, not the caller's PATH.
+The child environment excludes unrelated credentials and runtime/config overrides.
+The wrapper captures child output, suppresses raw failure details, and returns
+only the selected operation result. No arbitrary child output is forwarded.
 
-The helper retrieves exactly one secret by UUID, validates it in process memory, passes it to `vercel env add` through standard input, suppresses child output, and reports only the variable name and target.
-Add `--git-branch BRANCH` only for a branch-scoped Preview variable.
+If the keyring is unavailable, report the failure. Ask the user to unlock it in
+their own session. Do not ask for the token or keyring password in chat. See
+[operator setup](references/cli-guide.md) for human-managed credential setup.
 
-## Advanced: run a process with project secrets
+## Enforcement boundary
 
-Treat `bws run` as an exceptional, high-risk operation.
-It does not preserve an argument vector.
-It joins the supplied arguments into one string and executes that string through a shell.
-Quoting that looks safe at the calling shell can therefore be lost or reinterpreted.
+These helpers restrict their own interface. They do not sandbox the agent.
+A same-user process with unrestricted shell access can bypass them by reading
+the keyring, running raw `bws`, modifying a helper/config/binary, or calling the
+Bitwarden API itself. Removing `bws` from PATH or adding a denylist is insufficient.
+Do not claim wrapper-only access is enforced in that environment.
 
-Never call `bws run` directly from an agent operation.
-Use the guarded wrapper:
+Enforced deployment requires an operator-controlled credential service outside
+of the agent's OS identity or sandbox. The agent must lack access to the token,
+keyring and D-Bus session, service environment and memory, binaries, writable
+service configuration, and alternate credential paths. It must not have sudo or
+another route to assume that service identity. See
+[isolation requirements](references/cli-guide.md#enforced-deployment).
 
-```bash
-scripts/safe-bws-run.sh "$PROJECT_ID" vercel deploy
-```
+Do not disable sandboxing or approvals, expose the service keyring to agents,
+or change runtime restrictions to make a blocked operation work.
 
-The wrapper always uses `--no-inherit-env`, resolves the executable before launching `bws`, restricts commands to a narrow allowlist, and accepts only shell-safe argument tokens.
-It rejects shells, interpreters, environment-dump commands, `-c` command strings, whitespace, control characters, and shell metacharacters.
-Do not bypass the wrapper with nested `sh -c`, `bash -c`, PowerShell command strings, semicolons, newlines, command substitutions, `set`, `env`, `printenv`, or `export -p`.
+## Adding an operation
 
-`--no-inherit-env` reduces exposure of unrelated credentials but is not a sandbox.
-The child still receives every accessible secret in the selected project.
-Use the single-secret path whenever the destination needs only one value.
+When the task needs a secret-consuming operation beyond the two supported reads:
 
-## Change projects or secrets
+1. Resolve the requested work and approved destination without retrieving values.
+2. Implement a fixed operation inside the isolated credential service. Bind its
+   secret IDs, destination account/project, executable, and permitted arguments
+   in operator-owned configuration. Do not offer a generic secret or command API.
+3. Fetch only required secrets internally. Pass application credentials through
+   stdin or the intended child environment. Never pass the Bitwarden access token
+   to the application. Avoid shells and caller-controlled executables/config.
+4. Return selected non-secret results or a fixed status. Suppress raw child output
+   on success, failure, and timeout unless its schema is explicitly safe. String
+   replacement alone is not a reliable filter for encoded or transformed secrets.
+5. Test rejection and failure paths with synthetic credentials, then verify the
+   approved result without rendering credentials. Require explicit authorization
+   for external writes and destructive actions.
 
-Before create, edit, or delete operations:
-
-1. Confirm the exact project or secret ID and intended new state.
-2. Verify the access token has the required machine-account scope.
-3. Keep values in environment variables or another secure runtime channel.
-4. Use `--output none` unless non-secret response metadata is needed.
-5. Re-read metadata after the change and report only IDs, keys, and status.
-
-Examples:
-
-```bash
-scripts/with-bws-token.sh bws project create "$PROJECT_NAME" --output none
-scripts/with-bws-token.sh bws project edit "$PROJECT_ID" --name "$NEW_NAME" --output none
-scripts/with-bws-token.sh bws secret create "$SECRET_KEY" "$SECRET_VALUE" "$PROJECT_ID" --output none
-scripts/with-bws-token.sh bws secret edit "$SECRET_ID" --value "$SECRET_VALUE" --output none
-```
-
-Deletion is destructive.
-Require explicit user authorization for the resolved IDs immediately before running `bws secret delete` or `bws project delete`.
-
-## Configure another Bitwarden server
-
-For Bitwarden EU:
-
-```bash
-bws config server-base https://vault.bitwarden.eu
-```
-
-For self-hosted Bitwarden, use the base URL supplied by the user:
-
-```bash
-bws config server-base "$BITWARDEN_BASE_URL"
-```
-
-Prefer `BWS_SERVER_URL`, `BWS_PROFILE`, or a task-specific config file when the configuration should be temporary or isolated.
-Do not overwrite an existing default profile without checking it first.
+Until that operation and isolation exist, report it as unsupported. Do not fall
+back to generic retrieval, `bws run`, or a command that returns a credential.

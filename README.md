@@ -1,223 +1,69 @@
-# Bitwarden Secrets Manager CLI Skill
+# Bitwarden Secrets Manager CLI skill
 
-An Agent Skill for working safely with [Bitwarden Secrets Manager](https://bitwarden.com/products/secrets-manager/) through the `bws` command-line interface.
-
-The skill helps AI coding agents install and operate `bws`, authenticate with a machine-account access token, inspect projects and secrets, inject secrets into trusted processes, and manage Secrets Manager resources without exposing sensitive values.
-
-This repository follows the open [Agent Skills specification](https://agentskills.io) and can be installed with the [Skills CLI](https://github.com/vercel-labs/skills) into Codex, Claude Code, Cursor, and other supported agents.
-
-> [!IMPORTANT]
-> `bws` is the Bitwarden Secrets Manager CLI.
-> It is separate from the `bw` CLI used with Bitwarden Password Manager.
+An Agent Skill for performing approved Bitwarden operations without returning
+credentials to the agent. `bws` is the Secrets Manager CLI, separate from the
+`bw` Password Manager CLI.
 
 ## Install
-
-Install the skill with the standard Skills CLI command:
-
-```bash
-npx skills add hajekt2/bitwarden-secrets-manager-cli
-```
-
-The installer detects supported agents and asks where to install the skill.
-Project installation is the default.
-
-Install it globally for use across projects:
 
 ```bash
 npx skills add hajekt2/bitwarden-secrets-manager-cli -g
 ```
 
-Install it globally for Codex without interactive prompts:
+The bundled operation helper currently supports Linux with Python 3 and an
+available user keyring. See [operator setup](references/cli-guide.md).
 
-```bash
-npx skills add hajekt2/bitwarden-secrets-manager-cli \
-  --skill bitwarden-secrets-manager-cli \
-  --agent codex \
-  --global \
-  --yes
-```
-
-List the skill without installing it:
-
-```bash
-npx skills add hajekt2/bitwarden-secrets-manager-cli --list
-```
-
-The Skills CLI requires Node.js and npm.
-See the [Skills CLI documentation](https://github.com/vercel-labs/skills) for supported agents, installation scopes, and additional options.
-
-## What the skill does
-
-- Installs `bws` from Bitwarden's official installer when the CLI is missing.
-- Supports Bitwarden US, Bitwarden EU, and self-hosted server configuration.
-- Authenticates through an existing `BWS_ACCESS_TOKEN` or a Linux user keyring entry.
-- Validates authentication with a read-only request that prints no vault data.
-- Lists secret metadata without printing secret values or notes.
-- Retrieves individual secrets by UUID without exposing them in agent output.
-- Synchronizes one Bitwarden secret to a Vercel environment variable through standard input.
-- Guides safe project and secret creation, editing, and deletion.
-- Guards exceptional `bws run` operations with a narrow command allowlist and mandatory environment cleanup.
-- Uses live `bws --help` output and Bitwarden documentation as the final authority.
-
-## Authentication
-
-Create an access token for a [Bitwarden Secrets Manager machine account](https://bitwarden.com/help/access-tokens/).
-The machine account must have access to the projects and secrets required by the task.
-
-Provide the token as `BWS_ACCESS_TOKEN` in the environment where the agent runs.
-For example, read it without echoing it in Bash:
-
-```bash
-read -rsp "BWS access token: " BWS_ACCESS_TOKEN
-printf '\n'
-export BWS_ACCESS_TOKEN
-```
-
-Use your shell, CI secret store, agent runtime, or another secure environment-injection mechanism to set the value.
-Do not paste the token into prompts, commit it, store it in tracked `.env` files, or pass it through the `--access-token` command-line option.
-
-### Linux keyring
-
-On Ubuntu, an interactive user session can store the machine-account token in the Linux keyring instead of a shell profile or plaintext file.
-Install the required tools if they are missing:
-
-```bash
-sudo apt install libsecret-tools gnome-keyring
-```
-
-Store the token under the attributes expected by the skill:
-
-```bash
-secret-tool store \
-  --label="Bitwarden Secrets Manager" \
-  service bws \
-  account access-token
-```
-
-`secret-tool` prompts for the value.
-Enter it interactively rather than placing it on the command line.
-
-Retrieve it later without printing it:
-
-```bash
-export BWS_ACCESS_TOKEN="$(secret-tool lookup service bws account access-token)"
-```
-
-The skill normally uses the bundled wrapper, which first honors an existing environment variable and then tries this keyring entry:
-
-```bash
-scripts/with-bws-token.sh bws project list --output none
-```
-
-Keep shell tracing disabled and never verify the token with `echo`.
-This approach expects an available and unlocked user keyring.
-It is not a reliable default for a pure system service or a headless process without a user D-Bus and keyring session.
-Use the service manager or deployment platform's secret-injection mechanism in those environments.
-
-The skill validates authentication with:
+## Supported operations
 
 ```bash
 scripts/check-auth.sh
+scripts/with-bws-token.sh projects
 ```
 
-This performs a read-only project request with `--output none`.
-It does not print project data, secret metadata, secret values, or the token.
+Authentication returns a fixed status. Project listing returns only IDs and
+names as JSON. The token is loaded internally from the Linux keyring and supplied
+only to the fixed `bws` child. An inherited `BWS_ACCESS_TOKEN` is rejected.
 
-## Example prompts
+The wrapper is no longer a general command launcher. Raw secret listing,
+secret retrieval, arbitrary commands, and `bws run` are rejected before keyring
+access. Former metadata-listing, generic injection, and arbitrary Vercel sync
+helpers remain as compatibility entry points that fail closed.
 
-```text
-Use $bitwarden-secrets-manager-cli to install bws if needed and verify authentication without printing vault data.
-```
+To add secret-consuming work, implement a named operation with an approved
+secret and destination binding. Fetch credentials inside its service, pass them
+only to the intended child, and return selected results or fixed status. Do not
+provide an API that returns a key or accepts an arbitrary command.
 
-```text
-Use $bitwarden-secrets-manager-cli to list the secret IDs and keys available to this machine account without showing values.
-```
+## Security boundary
 
-```text
-Use $bitwarden-secrets-manager-cli to copy secret <SECRET_ID> to Vercel variable RESEND_API_KEY in production without displaying the value.
-```
+**This repository does not install an agent sandbox or isolated credential service.**
+The wrappers restrict their own interface and reduce accidental disclosure.
+An unrestricted agent running as the same user can still bypass them, access the
+keyring, or invoke raw `bws`. A PATH shim does not fix that.
 
-```text
-Use $bitwarden-secrets-manager-cli to create a secret in project <PROJECT_ID>, keeping the value out of logs and output.
-```
+Enforced isolation requires a credential service running outside the agent's
+identity/sandbox, with inaccessible credential storage and operator-owned code,
+configuration, and operation bindings. The agent must have no privilege escalation
+route into that service. See the [deployment requirements](references/cli-guide.md#enforced-deployment).
 
-Agents can also invoke the skill automatically when a request mentions Bitwarden Secrets Manager, `bws`, `BWS_ACCESS_TOKEN`, machine accounts, or secret injection.
-
-## Safety model
-
-- Keep access tokens and secret values out of prompts, logs, process arguments, and version control.
-- Start with read-only discovery before changing remote state.
-- Filter `bws secret list` and `bws secret get` output because raw responses include decrypted values.
-- Use `--output none` for mutations unless response metadata is required.
-- Resolve exact resource IDs before editing or deleting anything.
-- Require explicit authorization before deleting projects or secrets.
-- Prefer the single-secret Vercel helper over exposing an entire project through `bws run`.
-- Treat `bws run` as an exceptional, high-risk operation because it constructs a shell command string.
-- Use only the guarded wrapper, which requires `--no-inherit-env` and rejects unsafe command forms.
-- Treat environment cleanup as blast-radius reduction, not as a security sandbox.
-
-## Repository contents
-
-```text
-.
-├── SKILL.md
-├── agents/
-│   └── openai.yaml
-├── references/
-│   └── cli-guide.md
-└── scripts/
-    ├── check-auth.sh
-    ├── ensure-bws.sh
-    ├── list-secret-metadata.sh
-    ├── safe-bws-run.sh
-    ├── sync-secret-to-vercel.py
-    └── with-bws-token.sh
-```
-
-- [`SKILL.md`](SKILL.md) contains the agent workflow and safety rules.
-- [`references/cli-guide.md`](references/cli-guide.md) summarizes installation, authentication, configuration, commands, and troubleshooting.
-- [`scripts/ensure-bws.sh`](scripts/ensure-bws.sh) detects or installs the official `bws` CLI on Linux and macOS.
-- [`scripts/check-auth.sh`](scripts/check-auth.sh) validates authentication without printing vault data.
-- [`scripts/list-secret-metadata.sh`](scripts/list-secret-metadata.sh) strips values and notes from secret-list output.
-- [`scripts/safe-bws-run.sh`](scripts/safe-bws-run.sh) constrains exceptional `bws run` operations to a narrow, shell-safe command surface.
-- [`scripts/sync-secret-to-vercel.py`](scripts/sync-secret-to-vercel.py) copies exactly one Bitwarden secret to Vercel through standard input.
-- [`scripts/with-bws-token.sh`](scripts/with-bws-token.sh) loads the token from the environment or Linux keyring and runs a command without printing the token.
-
-On native Windows, the skill uses Bitwarden's official PowerShell installer.
-
-## Update or remove
-
-Update the installed skill:
+## Validation
 
 ```bash
-npx skills update bitwarden-secrets-manager-cli
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+bash -n scripts/with-bws-token.sh scripts/check-auth.sh scripts/list-secret-metadata.sh scripts/safe-bws-run.sh
 ```
 
-Update a global installation:
+Tests use synthetic credentials and mock all credential retrieval. They cover
+command rejection, inherited-token rejection, child environment isolation,
+response selection, and failures/timeouts. They do not prove host isolation.
 
-```bash
-npx skills update bitwarden-secrets-manager-cli --global
-```
+## Files
 
-Remove a project installation:
-
-```bash
-npx skills remove bitwarden-secrets-manager-cli
-```
-
-Remove a global installation:
-
-```bash
-npx skills remove bitwarden-secrets-manager-cli --global
-```
-
-## Documentation
-
-- [Bitwarden Secrets Manager CLI](https://bitwarden.com/help/secrets-manager-cli/)
-- [Bitwarden access tokens](https://bitwarden.com/help/access-tokens/)
-- [Bitwarden Secrets Manager SDK and `bws` releases](https://github.com/bitwarden/sdk-sm)
-- [Skills CLI](https://github.com/vercel-labs/skills)
-- [Agent Skills specification](https://agentskills.io)
+- [SKILL.md](SKILL.md): agent workflow and restrictions.
+- [scripts/bws-operations.py](scripts/bws-operations.py): fixed operation dispatcher.
+- [scripts/with-bws-token.sh](scripts/with-bws-token.sh): isolated-Python entry point.
+- [scripts/check-auth.sh](scripts/check-auth.sh): authentication check.
+- [references/cli-guide.md](references/cli-guide.md): operator setup and deployment requirements.
 
 ## License
 
