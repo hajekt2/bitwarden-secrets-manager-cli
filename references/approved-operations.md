@@ -38,6 +38,12 @@ reviewed source. Use strict SSH host verification and no redirects for sensitive
 HTTP requests. Credentials travel through stdin or a minimal child environment,
 never arguments, URLs or log messages. Never run shell tracing or environment dumps.
 
+An input may use `secret_name` instead of `secret_id` when its UUID is unknown.
+Keep `project_id` pinned. The worker resolves the name using the SDK's
+identifier-only endpoint, requires exactly one match in the organization, then
+checks the fetched secret's project. It never retrieves values to enumerate names.
+Prefer UUID bindings when already known. Ambiguous names fail before value lookup.
+
 The script must emit exactly `{"exports": {}}` on success when no vault import
 is needed. For signing-key import, configure each export as:
 

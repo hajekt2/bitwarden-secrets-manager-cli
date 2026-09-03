@@ -51,12 +51,15 @@ def load_recipe(home, name):
         for name, value in values.items():
             if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name):
                 raise ApprovedError()
-            expected = {"secret_id", "project_id"} if mode == "inputs" else {"project_id", "project_name", "secret_name"}
+            expected = ({"secret_name", "project_id"} if "secret_name" in value else {"secret_id", "project_id"}) if mode == "inputs" else {"project_id", "project_name", "secret_name"}
             if set(value) != expected:
                 raise ApprovedError()
             uuid_text(value["project_id"])
             if mode == "inputs":
-                uuid_text(value["secret_id"])
+                if "secret_id" in value:
+                    uuid_text(value["secret_id"])
+                elif not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value["secret_name"]):
+                    raise ApprovedError()
             else:
                 for field in ("project_name", "secret_name"):
                     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value[field]):
@@ -119,8 +122,18 @@ def perform(client, recipe, script, journal, execute=execute_script, login=None)
 
     inputs = {}
     for name, spec in recipe["inputs"].items():
-        secret = client.secrets().get(spec["secret_id"]).data
-        if str(secret.id) != spec["secret_id"] or str(secret.project_id) != spec["project_id"]:
+        secret_id = spec.get("secret_id")
+        if secret_id is None:
+            project = client.projects().get(spec["project_id"]).data
+            if str(project.id) != spec["project_id"]:
+                raise ApprovedError()
+            org = uuid_text(str(project.organization_id))
+            matches = [item for item in client.secrets().list(org).data.data if item.key == spec["secret_name"]]
+            if len(matches) != 1:
+                raise ApprovedError()
+            secret_id = uuid_text(str(matches[0].id))
+        secret = client.secrets().get(secret_id).data
+        if str(secret.id) != secret_id or str(secret.project_id) != spec["project_id"]:
             raise ApprovedError()
         if not isinstance(secret.value, str) or not secret.value or len(secret.value) > 65536:
             raise ApprovedError()
