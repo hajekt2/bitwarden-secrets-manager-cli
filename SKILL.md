@@ -1,6 +1,6 @@
 ---
 name: bitwarden-secrets-manager-cli
-description: Check Bitwarden Secrets Manager access and run approved operations without returning credentials. Use for bws, machine-account access, secret injection, and Bitwarden automation. Secret listing, raw retrieval, and generic command execution are prohibited.
+description: Check Bitwarden Secrets Manager access and provision generated secrets without returning values. Use for bws, machine-account access, approved secret creation, and Bitwarden automation. Raw retrieval and generic command execution remain prohibited.
 ---
 
 # Bitwarden Secrets Manager
@@ -22,7 +22,27 @@ scripts/with-bws-token.sh projects
 - `projects` returns only project IDs and names as JSON.
 - `scripts/check-auth.sh` is an alias for the authentication operation.
 
-The wrapper rejects all other operations before reading the keyring. It accepts
+### Create generated secrets
+
+After explicit user authorization, use:
+
+```bash
+scripts/with-bws-token.sh provision-generated RECIPE
+```
+
+Read [generated provisioning](references/provisioning.md) before configuring or
+running it. The recipe binds an existing project, a new secret name, region,
+and generated JSON fields. It accepts no secret value, arbitrary command, URL,
+or output destination. Successful output contains only status and the secret ID.
+It neither reads existing secret values nor imports credentials from files.
+Do not put secrets in a recipe.
+
+Treat a failed/uncertain write as requiring operator reconciliation. Do not
+delete its receipt or repeat it under another recipe name. A `recorded` result
+means a previous success was recorded locally, not that the secret was fetched
+or checked remotely. Never use this operation for rotation or replacement.
+
+The wrapper rejects other operations before reading the keyring. It accepts
 only these two exact legacy forms for compatibility:
 
 ```bash
@@ -83,7 +103,13 @@ or change runtime restrictions to make a blocked operation work.
 
 ## Adding an operation
 
-When the task needs a secret-consuming operation beyond the two supported reads:
+Generated-only provisioning is supported as described above. Its worker reduces
+accidental disclosure but does not establish host isolation. Use it only for
+explicitly authorized creation with approved recipe bindings. Existing-secret
+consumption, import and deployment injection still require the isolated service
+boundary below; generated provisioning is not a generic workaround for them.
+
+When the task needs another secret-consuming operation:
 
 1. Resolve the requested work and approved destination without retrieving values.
 2. Implement a fixed operation inside the isolated credential service. Bind its

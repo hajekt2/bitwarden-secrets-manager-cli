@@ -18,11 +18,18 @@ available user keyring. See [operator setup](references/cli-guide.md).
 ```bash
 scripts/check-auth.sh
 scripts/with-bws-token.sh projects
+scripts/with-bws-token.sh provision-generated RECIPE
 ```
 
 Authentication returns a fixed status. Project listing returns only IDs and
 names as JSON. The token is loaded internally from the Linux keyring and supplied
 only to the fixed `bws` child. An inherited `BWS_ACCESS_TOKEN` is rejected.
+
+Generated provisioning uses the pinned official Python SDK in a separate worker,
+not `bws secret create`, whose value argument would expose plaintext in process
+arguments. It accepts an approved recipe and returns a receipt ID, never values.
+See [setup and retry rules](references/provisioning.md). It does not import or
+export existing secrets and does not install an isolated credential service.
 
 The wrapper is no longer a general command launcher. Raw secret listing,
 secret retrieval, arbitrary commands, and `bws run` are rejected before keyring

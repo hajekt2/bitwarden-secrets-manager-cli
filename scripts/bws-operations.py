@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fixed, read-only operations. This same-user helper is not a sandbox."""
+"""Fixed operations with selected results. This same-user helper is not a sandbox."""
 
 import json
 import os
 from pathlib import Path
 import pwd
+import re
 import subprocess
 import sys
 import uuid
@@ -95,6 +96,13 @@ def execute(operation):
 
 
 def main(args):
+    if len(args) == 2 and args[0] == "provision-generated" and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args[1]):
+        try:
+            print(provision_generated(args[1]))
+            return 0
+        except Exception:
+            print("Provisioning failed; output suppressed. Do not delete receipts or retry uncertain writes.", file=sys.stderr)
+            return 1
     # Exact compatibility forms only. No generic command forwarding.
     legacy = {
         ("bws", "project", "list", "--output", "none"): "check-auth",
@@ -102,7 +110,7 @@ def main(args):
     }
     operation = args[0] if len(args) == 1 else legacy.get(tuple(args))
     if operation not in {"check-auth", "projects"}:
-        print("Operation denied. Allowed operations: check-auth, projects.", file=sys.stderr)
+        print("Operation denied. Use check-auth, projects, or provision-generated RECIPE.", file=sys.stderr)
         return 2
     try:
         print(execute(operation))
@@ -110,6 +118,36 @@ def main(args):
     except OperationError as error:
         print(str(error), file=sys.stderr)
         return 1
+
+
+def provision_generated(name):
+    if os.environ.get("BWS_ACCESS_TOKEN"):
+        raise OperationError()
+    env = command_environment()
+    for key in ("DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "DISPLAY", "XAUTHORITY"):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    executable = Path(env["HOME"]) / ".local/share/bws-operations/venv/bin/python"
+    read_fd, write_fd = os.pipe()
+    try:
+        # No secret enters argv, parent environment, or parent Python memory.
+        result = subprocess.run(
+            [str(executable), "-I", str(Path(__file__).with_name("provision-worker.py")), name, str(write_fd)],
+            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            pass_fds=(write_fd,), timeout=90, check=False,
+        )
+        if result.returncode != 0:
+            raise OperationError()
+        os.close(write_fd)
+        write_fd = -1
+        result = json.loads(os.read(read_fd, 1024))
+        if set(result) != {"status", "secret_id"} or result["status"] not in ("created", "recorded"):
+            raise OperationError()
+        return json.dumps({"status": result["status"], "secret_id": str(uuid.UUID(result["secret_id"]))})
+    finally:
+        os.close(read_fd)
+        if write_fd >= 0:
+            os.close(write_fd)
 
 
 if __name__ == "__main__":
