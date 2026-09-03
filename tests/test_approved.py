@@ -33,6 +33,15 @@ RECIPE = {'script': '/fixed/reviewed.py', 'sha256': 'a' * 64, 'region': 'us',
 
 
 class ApprovedTests(unittest.TestCase):
+    def test_binding_inspection_never_fetches_values(self):
+        client = self.client()
+        client.secrets().list.return_value = Obj(data=Obj(data=[Obj(id=SECRET,key='bootstrap',project_ids=[PROJECT])]))
+        with patch.object(a,'load_recipe',return_value=(RECIPE,'')):
+            result = a.inspect_inputs(Path('/unused'),'example',lambda _:client)
+        self.assertEqual(result,{'status':'bindings','bindings':[{'alias':'bootstrap','secret_ids':[SECRET]}]})
+        client.secrets().get.assert_not_called()
+        client.secrets().create.assert_not_called()
+
     def test_named_input_uses_identifiers_and_rejects_ambiguity(self):
         client = self.client()
         recipe = {**RECIPE, 'inputs': {'bootstrap': {'secret_name':'named-secret','project_id':PROJECT}}, 'exports':{}}

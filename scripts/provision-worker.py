@@ -30,7 +30,7 @@ def main():
         return 1
     result_fd = int(sys.argv[2])
     ops = load_module("operations", "bws-operations.py")
-    if len(sys.argv) == 4 and sys.argv[3] != "run-approved":
+    if len(sys.argv) == 4 and sys.argv[3] not in ("run-approved", "inspect-approved"):
         return 1
     provisioning = load_module("provisioning", "approved.py" if len(sys.argv) == 4 else "provision.py")
 
@@ -60,7 +60,10 @@ def main():
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             return 1
         fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        result = provisioning.run(home, sys.argv[1], login)
+        if len(sys.argv) == 4 and sys.argv[3] == 'inspect-approved':
+            result = provisioning.inspect_inputs(home, sys.argv[1], login)
+        else:
+            result = provisioning.run(home, sys.argv[1], login)
     os.write(result_fd, json.dumps(result).encode("ascii"))
     return 0
 

@@ -54,6 +54,11 @@ import destinations in private non-secret configuration. The wrapper executes
 only those reviewed bytes, supplies values through stdin, and returns only fixed
 status and imported secret IDs. The caller cannot supply commands or values.
 
+Use `scripts/with-bws-token.sh inspect-approved RECIPE` to check input bindings
+without retrieving values or executing the script. It returns each configured
+alias and matching secret UUIDs from the SDK identifier-only endpoint. Empty or
+multiple matches require correcting the non-secret binding before execution.
+
 Treat a failed/uncertain write as requiring operator reconciliation. Do not
 delete its receipt or repeat it under another recipe name. A `recorded` result
 means a previous success was recorded locally, not that the secret was fetched

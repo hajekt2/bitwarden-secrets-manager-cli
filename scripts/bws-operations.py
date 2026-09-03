@@ -97,6 +97,13 @@ def execute(operation):
 
 
 def main(args):
+    if len(args) == 2 and args[0] == "inspect-approved" and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args[1]):
+        try:
+            print(provision_generated(args[1], approved=True, inspect=True))
+            return 0
+        except Exception:
+            print("Binding inspection failed; output suppressed.", file=sys.stderr)
+            return 1
     if len(args) == 2 and args[0] == "run-approved" and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args[1]):
         try:
             print(provision_generated(args[1], approved=True))
@@ -128,7 +135,7 @@ def main(args):
         return 1
 
 
-def provision_generated(name, approved=False):
+def provision_generated(name, approved=False, inspect=False):
     if os.environ.get("BWS_ACCESS_TOKEN"):
         raise OperationError()
     env = command_environment()
@@ -140,7 +147,7 @@ def provision_generated(name, approved=False):
     try:
         # No secret enters argv, parent environment, or parent Python memory.
         child = subprocess.Popen(
-            [str(executable), "-I", str(Path(__file__).with_name("provision-worker.py")), name, str(write_fd)] + (["run-approved"] if approved else []),
+            [str(executable), "-I", str(Path(__file__).with_name("provision-worker.py")), name, str(write_fd)] + (["inspect-approved" if inspect else "run-approved"] if approved else []),
             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             pass_fds=(write_fd,), start_new_session=True,
         )
@@ -158,7 +165,15 @@ def provision_generated(name, approved=False):
             raise OperationError()
         os.close(write_fd)
         write_fd = -1
-        result = json.loads(os.read(read_fd, 1024))
+        result = json.loads(os.read(read_fd, 4096))
+        if inspect:
+            if set(result) != {'status','bindings'} or result['status'] != 'bindings' or not isinstance(result['bindings'],list) or len(result['bindings']) > 16:
+                raise OperationError()
+            for item in result['bindings']:
+                if set(item) != {'alias','secret_ids'} or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',item['alias']) or not isinstance(item['secret_ids'],list) or len(item['secret_ids']) > 16:
+                    raise OperationError()
+                item['secret_ids'] = [str(uuid.UUID(v)) for v in item['secret_ids']]
+            return json.dumps(result)
         if approved:
             if (set(result) != {"status", "secret_ids"} or result["status"] not in ("completed", "recorded")
                     or not isinstance(result["secret_ids"], list) or len(result["secret_ids"]) > 16):

@@ -193,3 +193,19 @@ def run(home, name, login):
         finally:
             os.close(directory)
         return perform(None, recipe, script, journal, login=login)
+
+
+def inspect_inputs(home, name, login):
+    recipe, _ = load_recipe(home, name)
+    client = login(recipe['region'])
+    bindings = []
+    for alias, spec in recipe['inputs'].items():
+        project = client.projects().get(spec['project_id']).data
+        if str(project.id) != spec['project_id']:
+            raise ApprovedError()
+        items = client.secrets().list(uuid_text(str(project.organization_id))).data.data
+        matches = [uuid_text(str(item.id)) for item in items
+                   if spec['project_id'] in [str(v) for v in item.project_ids]
+                   and (str(item.id) == spec.get('secret_id') or item.key == spec.get('secret_name'))]
+        bindings.append({'alias':alias, 'secret_ids':matches})
+    return {'status':'bindings', 'bindings':bindings}
