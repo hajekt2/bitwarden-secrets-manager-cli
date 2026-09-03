@@ -1,13 +1,15 @@
 ---
 name: bitwarden-secrets-manager-cli
-description: Check Bitwarden Secrets Manager access and provision generated secrets without returning values. Use for bws, machine-account access, approved secret creation, and Bitwarden automation. Raw retrieval and generic command execution remain prohibited.
+description: Check Bitwarden access, create generated secrets, and run approved credential-consuming operations without returning values. Use for bws and Bitwarden-backed deployment or signing-key import.
 ---
 
 # Bitwarden Secrets Manager
 
 Request work, never credentials. Return only the approved operation's result.
 Do not print or return tokens or secret values through stdout, stderr, errors,
-logs, tool responses, chat, or files readable by the agent.
+logs, tool responses, chat, or temporary files. Fixed deployment operations may
+write credentials to their approved, access-controlled runtime destinations;
+never inspect or render those files through an agent tool.
 
 ## Available operations
 
@@ -36,6 +38,21 @@ and generated JSON fields. It accepts no secret value, arbitrary command, URL,
 or output destination. Successful output contains only status and the secret ID.
 It neither reads existing secret values nor imports credentials from files.
 Do not put secrets in a recipe.
+
+### Run a credential-consuming operation
+
+After user authorization for the actual task, use:
+
+```bash
+scripts/with-bws-token.sh run-approved RECIPE
+```
+
+Read [approved operations](references/approved-operations.md) before configuring
+or running one. Review the self-contained script, its fixed destinations and
+every secret-bearing path. Bind its hash, input secret IDs and optional vault
+import destinations in private non-secret configuration. The wrapper executes
+only those reviewed bytes, supplies values through stdin, and returns only fixed
+status and imported secret IDs. The caller cannot supply commands or values.
 
 Treat a failed/uncertain write as requiring operator reconciliation. Do not
 delete its receipt or repeat it under another recipe name. A `recorded` result
@@ -91,7 +108,7 @@ the keyring, running raw `bws`, modifying a helper/config/binary, or calling the
 Bitwarden API itself. Removing `bws` from PATH or adding a denylist is insufficient.
 Do not claim wrapper-only access is enforced in that environment.
 
-Enforced deployment requires an operator-controlled credential service outside
+Protection against an unrestricted or malicious agent requires a credential service outside
 of the agent's OS identity or sandbox. The agent must lack access to the token,
 keyring and D-Bus session, service environment and memory, binaries, writable
 service configuration, and alternate credential paths. It must not have sudo or
@@ -103,18 +120,18 @@ or change runtime restrictions to make a blocked operation work.
 
 ## Adding an operation
 
-Generated-only provisioning is supported as described above. Its worker reduces
-accidental disclosure but does not establish host isolation. Use it only for
-explicitly authorized creation with approved recipe bindings. Existing-secret
-consumption, import and deployment injection still require the isolated service
-boundary below; generated provisioning is not a generic workaround for them.
+The wrappers prevent accidental output disclosure; they do not establish host
+isolation. Use approved operations for ordinary authorized deployment and import
+tasks. Do not make a separate credential service a prerequisite unless the user
+requires protection against the agent itself. Keep that stronger threat model
+distinct from preventing accidental exposure.
 
 When the task needs another secret-consuming operation:
 
 1. Resolve the requested work and approved destination without retrieving values.
-2. Implement a fixed operation inside the isolated credential service. Bind its
-   secret IDs, destination account/project, executable, and permitted arguments
-   in operator-owned configuration. Do not offer a generic secret or command API.
+2. Implement a self-contained fixed operation and review its full credential
+   path. Bind its hash, secret IDs and destinations in approved configuration.
+   Do not offer a generic secret or command API.
 3. Fetch only required secrets internally. Pass application credentials through
    stdin or the intended child environment. Never pass the Bitwarden access token
    to the application. Avoid shells and caller-controlled executables/config.
@@ -125,5 +142,5 @@ When the task needs another secret-consuming operation:
    approved result without rendering credentials. Require explicit authorization
    for external writes and destructive actions.
 
-Until that operation and isolation exist, report it as unsupported. Do not fall
+Until that reviewed operation exists, report it as unsupported. Do not fall
 back to generic retrieval, `bws run`, or a command that returns a credential.

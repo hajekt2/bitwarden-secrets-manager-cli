@@ -123,7 +123,7 @@ class ProvisionTests(unittest.TestCase):
             worker.assert_not_called()
 
     def test_inherited_token_rejected(self):
-        with patch.dict(os.environ, {'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET'}), patch.object(ops.subprocess, 'run') as child:
+        with patch.dict(os.environ, {'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET'}), patch.object(ops.subprocess, 'Popen') as child:
             with self.assertRaises(ops.OperationError): ops.provision_generated('example')
             child.assert_not_called()
 
@@ -137,16 +137,16 @@ class ProvisionTests(unittest.TestCase):
             self.assertNotIn('HTTPS_PROXY', kwargs['env'])
             self.assertEqual(argv[1], '-I')
             os.write(kwargs['pass_fds'][0], json.dumps({'status':'created','secret_id':SECRET}).encode())
-            return Obj(returncode=0)
-        with patch.dict(os.environ, {'OTHER_SECRET':'SYNTHETIC_SECRET','HTTPS_PROXY':'https://evil.invalid'}, clear=True), patch.object(ops.subprocess, 'run', side_effect=child):
+            return Obj(returncode=0, pid=12345, wait=Mock())
+        with patch.dict(os.environ, {'OTHER_SECRET':'SYNTHETIC_SECRET','HTTPS_PROXY':'https://evil.invalid'}, clear=True), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
             self.assertEqual(json.loads(ops.provision_generated('example')), {'status':'created','secret_id':SECRET})
 
     def test_malformed_worker_receipt_is_not_echoed(self):
         def child(argv, **kwargs):
             os.write(kwargs['pass_fds'][0], b'{"status":"created","secret_id":"SYNTHETIC_SECRET"}')
-            return Obj(returncode=0)
+            return Obj(returncode=0, pid=12345, wait=Mock())
         stdout, stderr = io.StringIO(), io.StringIO()
-        with patch.dict(os.environ, {}, clear=True), patch.object(ops.subprocess, 'run', side_effect=child), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with patch.dict(os.environ, {}, clear=True), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             self.assertEqual(ops.main(['provision-generated','example']),1)
         self.assertNotIn('SYNTHETIC_SECRET', stdout.getvalue()+stderr.getvalue())
 

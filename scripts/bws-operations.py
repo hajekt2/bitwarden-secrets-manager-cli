@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import signal
 import subprocess
 import sys
 import uuid
@@ -96,6 +97,13 @@ def execute(operation):
 
 
 def main(args):
+    if len(args) == 2 and args[0] == "run-approved" and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args[1]):
+        try:
+            print(provision_generated(args[1], approved=True))
+            return 0
+        except Exception:
+            print("Approved operation failed; output suppressed. Reconcile pending operations before retrying.", file=sys.stderr)
+            return 1
     if len(args) == 2 and args[0] == "provision-generated" and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args[1]):
         try:
             print(provision_generated(args[1]))
@@ -110,7 +118,7 @@ def main(args):
     }
     operation = args[0] if len(args) == 1 else legacy.get(tuple(args))
     if operation not in {"check-auth", "projects"}:
-        print("Operation denied. Use check-auth, projects, or provision-generated RECIPE.", file=sys.stderr)
+        print("Operation denied. Use check-auth, projects, provision-generated RECIPE, or run-approved RECIPE.", file=sys.stderr)
         return 2
     try:
         print(execute(operation))
@@ -120,7 +128,7 @@ def main(args):
         return 1
 
 
-def provision_generated(name):
+def provision_generated(name, approved=False):
     if os.environ.get("BWS_ACCESS_TOKEN"):
         raise OperationError()
     env = command_environment()
@@ -131,16 +139,31 @@ def provision_generated(name):
     read_fd, write_fd = os.pipe()
     try:
         # No secret enters argv, parent environment, or parent Python memory.
-        result = subprocess.run(
-            [str(executable), "-I", str(Path(__file__).with_name("provision-worker.py")), name, str(write_fd)],
+        child = subprocess.Popen(
+            [str(executable), "-I", str(Path(__file__).with_name("provision-worker.py")), name, str(write_fd)] + (["run-approved"] if approved else []),
             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            pass_fds=(write_fd,), timeout=90, check=False,
+            pass_fds=(write_fd,), start_new_session=True,
         )
-        if result.returncode != 0:
+        try:
+            child.wait(timeout=360 if approved else 90)
+        finally:
+            # Also reap descendants after a successful worker exit. Reviewed
+            # operations must not detach or leave background credential users.
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait()
+        if child.returncode != 0:
             raise OperationError()
         os.close(write_fd)
         write_fd = -1
         result = json.loads(os.read(read_fd, 1024))
+        if approved:
+            if (set(result) != {"status", "secret_ids"} or result["status"] not in ("completed", "recorded")
+                    or not isinstance(result["secret_ids"], list) or len(result["secret_ids"]) > 16):
+                raise OperationError()
+            return json.dumps({"status": result["status"], "secret_ids": [str(uuid.UUID(v)) for v in result["secret_ids"]]})
         if set(result) != {"status", "secret_id"} or result["status"] not in ("created", "recorded"):
             raise OperationError()
         return json.dumps({"status": result["status"], "secret_id": str(uuid.UUID(result["secret_id"]))})

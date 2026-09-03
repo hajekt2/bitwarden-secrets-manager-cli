@@ -19,6 +19,7 @@ available user keyring. See [operator setup](references/cli-guide.md).
 scripts/check-auth.sh
 scripts/with-bws-token.sh projects
 scripts/with-bws-token.sh provision-generated RECIPE
+scripts/with-bws-token.sh run-approved RECIPE
 ```
 
 Authentication returns a fixed status. Project listing returns only IDs and
@@ -31,13 +32,18 @@ arguments. It accepts an approved recipe and returns a receipt ID, never values.
 See [setup and retry rules](references/provisioning.md). It does not import or
 export existing secrets and does not install an isolated credential service.
 
+Approved operations can consume selected secrets and import signing material.
+They execute hash-pinned reviewed scripts, pass credentials through stdin, suppress
+all raw child output, and return only status and imported secret IDs. See
+[operation bindings and retry rules](references/approved-operations.md).
+
 The wrapper is no longer a general command launcher. Raw secret listing,
 secret retrieval, arbitrary commands, and `bws run` are rejected before keyring
 access. Former metadata-listing, generic injection, and arbitrary Vercel sync
 helpers remain as compatibility entry points that fail closed.
 
 To add secret-consuming work, implement a named operation with an approved
-secret and destination binding. Fetch credentials inside its service, pass them
+secret and destination binding. Fetch credentials inside its private worker, pass them
 only to the intended child, and return selected results or fixed status. Do not
 provide an API that returns a key or accepts an arbitrary command.
 
@@ -52,6 +58,8 @@ Enforced isolation requires a credential service running outside the agent's
 identity/sandbox, with inaccessible credential storage and operator-owned code,
 configuration, and operation bindings. The agent must have no privilege escalation
 route into that service. See the [deployment requirements](references/cli-guide.md#enforced-deployment).
+That stronger isolation is optional for ordinary tasks whose goal is preventing
+accidental disclosure, and is not installed by the approved-operation wrapper.
 
 ## Validation
 
