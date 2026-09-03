@@ -36,12 +36,12 @@ class ApprovedTests(unittest.TestCase):
     def test_named_input_uses_identifiers_and_rejects_ambiguity(self):
         client = self.client()
         recipe = {**RECIPE, 'inputs': {'bootstrap': {'secret_name':'named-secret','project_id':PROJECT}}, 'exports':{}}
-        client.secrets().list.return_value = Obj(data=Obj(data=[Obj(id=SECRET,key='named-secret')]))
+        client.secrets().list.return_value = Obj(data=Obj(data=[Obj(id=SECRET,key='named-secret',project_ids=[PROJECT])]))
         with tempfile.TemporaryFile(mode='w+') as journal:
             self.assertEqual(a.perform(client,recipe,'',journal,lambda *_:{} )['status'],'completed')
         client.secrets().get.assert_called_once_with(SECRET)
         client.secrets().get.reset_mock()
-        client.secrets().list.return_value.data.data.append(Obj(id=IMPORTED,key='named-secret'))
+        client.secrets().list.return_value.data.data.append(Obj(id=IMPORTED,key='named-secret',project_ids=[PROJECT]))
         with tempfile.TemporaryFile(mode='w+') as journal, self.assertRaises(a.ApprovedError):
             a.perform(client,recipe,'',journal,lambda *_:{})
         client.secrets().get.assert_not_called()

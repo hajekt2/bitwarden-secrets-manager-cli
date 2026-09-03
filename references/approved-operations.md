@@ -40,7 +40,7 @@ never arguments, URLs or log messages. Never run shell tracing or environment du
 
 An input may use `secret_name` instead of `secret_id` when its UUID is unknown.
 Keep `project_id` pinned. The worker resolves the name using the SDK's
-identifier-only endpoint, requires exactly one match in the organization, then
+identifier-only endpoint, requires exactly one match in the pinned project, then
 checks the fetched secret's project. It never retrieves values to enumerate names.
 Prefer UUID bindings when already known. Ambiguous names fail before value lookup.
 

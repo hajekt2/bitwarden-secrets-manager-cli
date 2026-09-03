@@ -128,7 +128,8 @@ def perform(client, recipe, script, journal, execute=execute_script, login=None)
             if str(project.id) != spec["project_id"]:
                 raise ApprovedError()
             org = uuid_text(str(project.organization_id))
-            matches = [item for item in client.secrets().list(org).data.data if item.key == spec["secret_name"]]
+            matches = [item for item in client.secrets().list(org).data.data
+                       if item.key == spec["secret_name"] and spec["project_id"] in [str(v) for v in item.project_ids]]
             if len(matches) != 1:
                 raise ApprovedError()
             secret_id = uuid_text(str(matches[0].id))
