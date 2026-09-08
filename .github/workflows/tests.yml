@@ -20,6 +20,7 @@ jobs:
         with:
           python-version: "3.12.3"
           cache: pip
+          cache-dependency-path: requirements-provision.txt
 
       - name: Install pinned dependencies
         run: python -m pip install --require-hashes -r requirements-provision.txt
