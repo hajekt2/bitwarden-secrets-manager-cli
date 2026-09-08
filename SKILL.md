@@ -23,9 +23,15 @@ scripts/with-bws-token.sh secret-names REGION
 
 - `check-auth` makes a read-only project request and returns a fixed status.
 - `projects` returns only project IDs and names as JSON.
-- `secret-names` accepts only `us` or `eu` as `REGION`. It returns each secret
-  key name and project name, sorted as JSON. A project ID is included only when
-  duplicate project names require disambiguation.
+- `secret-names` accepts only `us` or `eu` as `REGION`. It returns a JSON object
+  with `count` (the number of secret identifiers the listing returned) and
+  `secrets`: each secret key name and project name, sorted. A project ID is
+  included only when duplicate project names require disambiguation. A secret
+  whose project is not among the listed projects, or that has no project, is
+  reported under an `unattributed:` marker with the project ID (or
+  `unattributed:no-project`) instead of being dropped, so a complete listing
+  with unattributable entries is visibly distinct from a failed or partial one;
+  a failed listing exits nonzero without output.
 
 `secret-names` first selects project identifiers, then calls the pinned SDK's
 identifier-only `client.secrets().list(organization_id)` endpoint. It never

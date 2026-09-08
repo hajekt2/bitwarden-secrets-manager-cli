@@ -151,7 +151,7 @@ class OperationsTests(unittest.TestCase):
         projects = [{**PROJECT, 'organization_id': ORG}]
         self.assertEqual(
             ops.identifier_secret_names(client, projects),
-            [{'project': 'example', 'key': 'database-url'}],
+            (1, [{'project': 'example', 'key': 'database-url'}]),
         )
         client.secrets().list.assert_called_once_with(ORG)
         client.secrets().get.assert_not_called()
@@ -167,31 +167,82 @@ class OperationsTests(unittest.TestCase):
             {**PROJECT, 'organization_id': ORG},
             {'id': second, 'name': PROJECT['name'], 'organization_id': ORG},
         ]
-        self.assertEqual(ops.identifier_secret_names(client, projects), [
-            {'project': 'example', 'key': 'shared-key', 'project_id': PROJECT['id']},
-            {'project': 'example', 'key': 'shared-key', 'project_id': second},
-        ])
+        self.assertEqual(ops.identifier_secret_names(client, projects), (
+            1,
+            [
+                {'project': 'example', 'key': 'shared-key', 'project_id': PROJECT['id']},
+                {'project': 'example', 'key': 'shared-key', 'project_id': second},
+            ],
+        ))
+
+    def test_secret_name_enumeration_surfaces_unattributed_projects(self):
+        ghost = '99999999-8888-4777-8666-555555555555'
+        client = Mock()
+        client.secrets().list.return_value = Obj(data=Obj(data=[
+            Obj(key='listed-key', project_ids=[PROJECT['id']]),
+            Obj(key='orphan-key', project_ids=[ghost]),
+            Obj(key='detached-key', project_ids=[]),
+        ]))
+        projects = [{**PROJECT, 'organization_id': ORG}]
+        self.assertEqual(ops.identifier_secret_names(client, projects), (
+            3,
+            [
+                {'project': 'example', 'key': 'listed-key'},
+                {'project': 'unattributed:' + ghost, 'key': 'orphan-key'},
+                {'project': 'unattributed:no-project', 'key': 'detached-key'},
+            ],
+        ))
+
+    def test_secret_name_enumeration_rejects_marker_like_project_names(self):
+        client = Mock()
+        projects = [{'id': PROJECT['id'], 'name': 'unattributed:example', 'organization_id': ORG}]
+        with self.assertRaises(ops.OperationError):
+            ops.identifier_secret_names(client, projects)
+        client.secrets.assert_not_called()
 
     def test_secret_names_success_and_failure_never_return_token(self):
-        safe = json.dumps([{'project': 'example', 'key': 'database-url'}]).encode()
+        safe = json.dumps({'count': 1, 'secrets': [{'project': 'example', 'key': 'database-url'}]}).encode()
         success = subprocess.CompletedProcess([], 0, stdout=safe, stderr=TOKEN.encode())
         failure = subprocess.CompletedProcess([], 1, stdout=TOKEN.encode(), stderr=TOKEN.encode())
         with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops.subprocess, 'run', return_value=success):
             result = ops.sdk_secret_names('us', TOKEN, [{**PROJECT, 'organization_id': ORG}], {'HOME': '/fixed'})
-        self.assertEqual(json.loads(result), [{'project': 'example', 'key': 'database-url'}])
+        self.assertEqual(json.loads(result), {'count': 1, 'secrets': [{'project': 'example', 'key': 'database-url'}]})
         self.assertNotIn(TOKEN, result)
         with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops.subprocess, 'run', return_value=failure):
             with self.assertRaises(ops.OperationError) as error:
                 ops.sdk_secret_names('us', TOKEN, [{**PROJECT, 'organization_id': ORG}], {'HOME': '/fixed'})
         self.assertNotIn(TOKEN, str(error.exception))
 
+    def test_secret_names_report_shape_fails_closed(self):
+        projects = [{**PROJECT, 'organization_id': ORG}]
+        rejected = [
+            b'[]',
+            json.dumps({'count': 1}).encode(),
+            json.dumps({'count': 2, 'secrets': []}).encode(),
+            json.dumps({'count': 0, 'secrets': [{'project': 'example', 'key': 'k'}]}).encode(),
+            json.dumps({'count': True, 'secrets': []}).encode(),
+            json.dumps({'count': 1, 'secrets': [{'project': 'unlisted', 'key': 'k'}]}).encode(),
+            json.dumps({'count': 1, 'secrets': [{'project': 'unattributed:' + ORG, 'key': 'k', 'project_id': PROJECT['id']}]}).encode(),
+        ]
+        for stdout in rejected:
+            result = subprocess.CompletedProcess([], 0, stdout=stdout, stderr=b'')
+            with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops.subprocess, 'run', return_value=result):
+                with self.assertRaises(ops.OperationError):
+                    ops.sdk_secret_names('us', TOKEN, projects, {'HOME': '/fixed'})
+        result = subprocess.CompletedProcess([], 0, stdout=json.dumps({'count': 1, 'secrets': [{'project': 'unattributed:' + ORG, 'key': 'orphan-key'}]}).encode(), stderr=b'')
+        with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops.subprocess, 'run', return_value=result):
+            self.assertEqual(
+                json.loads(ops.sdk_secret_names('us', TOKEN, projects, {'HOME': '/fixed'})),
+                {'count': 1, 'secrets': [{'project': 'unattributed:' + ORG, 'key': 'orphan-key'}]},
+            )
+
     def test_secret_names_cli_uses_no_bulk_secret_command(self):
         project_payload = json.dumps([{**PROJECT, 'organizationId': ORG}]).encode()
         variables = {'BWS_ACCESS_TOKEN': TOKEN, 'BWS_ACCESS_TOKEN_SOURCE': 'environment'}
-        with patch.dict(os.environ, variables), patch.object(ops, 'keyring_available', return_value=False), patch.object(ops, 'bws_executable', return_value='/trusted/bws'), patch.object(ops, 'run_captured', return_value=project_payload) as run, patch.object(ops, 'sdk_secret_names', return_value='[]') as sdk:
+        with patch.dict(os.environ, variables), patch.object(ops, 'keyring_available', return_value=False), patch.object(ops, 'bws_executable', return_value='/trusted/bws'), patch.object(ops, 'run_captured', return_value=project_payload) as run, patch.object(ops, 'sdk_secret_names', return_value='{"count": 0, "secrets": []}') as sdk:
             code, out, err = self.invoke(['secret-names', 'us'])
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(out), [])
+        self.assertEqual(json.loads(out), {'count': 0, 'secrets': []})
         self.assertEqual(run.call_args.args[0], ['/trusted/bws', 'project', 'list', '--output', 'json'])
         self.assertNotIn('secret', run.call_args.args[0])
         sdk.assert_called_once()

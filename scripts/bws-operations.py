@@ -18,6 +18,7 @@ KEYRING_EXECUTABLE = Path("/usr/bin/secret-tool")
 ENVIRONMENT_TOKEN_SOURCE = "BWS_ACCESS_TOKEN_SOURCE"
 ENVIRONMENT_TOKEN_OPT_IN = "environment"
 MAXIMUM_TOKEN_BYTES = 8192
+UNATTRIBUTED_PREFIX = "unattributed:"
 
 
 class OperationError(Exception):
@@ -146,27 +147,35 @@ def selected_projects(output, include_organization=False):
 
 
 def identifier_secret_names(client, projects):
+    if any(project["name"].startswith(UNATTRIBUTED_PREFIX) for project in projects):
+        raise OperationError("Project names conflict with unattributed markers; child output suppressed.")
     project_by_id = {project["id"]: project for project in projects}
     duplicate_names = {
         project["name"] for project in projects
         if sum(other["name"] == project["name"] for other in projects) > 1
     }
     selected = []
+    identifiers_seen = 0
     organizations = sorted({project["organization_id"] for project in projects})
     for organization_id in organizations:
         identifiers = client.secrets().list(organization_id).data.data
         for identifier in identifiers:
             if not isinstance(identifier.key, str) or len(identifier.key) > 256 or "\x00" in identifier.key:
                 raise OperationError("Invalid secret identifier response; child output suppressed.")
-            for project_id in sorted({str(value) for value in identifier.project_ids}):
+            identifiers_seen += 1
+            project_ids = sorted({str(value) for value in identifier.project_ids}) or [None]
+            for project_id in project_ids:
                 project = project_by_id.get(project_id)
-                if project is None or project["organization_id"] != organization_id:
-                    continue
-                item = {"project": project["name"], "key": identifier.key}
-                if project["name"] in duplicate_names:
-                    item["project_id"] = project_id
+                if project is not None and project["organization_id"] == organization_id:
+                    item = {"project": project["name"], "key": identifier.key}
+                    if project["name"] in duplicate_names:
+                        item["project_id"] = project_id
+                elif project_id is None:
+                    item = {"project": UNATTRIBUTED_PREFIX + "no-project", "key": identifier.key}
+                else:
+                    item = {"project": UNATTRIBUTED_PREFIX + project_id, "key": identifier.key}
                 selected.append(item)
-    return sorted(selected, key=lambda item: (item["project"], item.get("project_id", ""), item["key"]))
+    return identifiers_seen, sorted(selected, key=lambda item: (item["project"], item.get("project_id", ""), item["key"]))
 
 
 def secret_names_worker(region):
@@ -197,7 +206,8 @@ def secret_names_worker(region):
             "userAgent": "secret-name-enumeration",
         }))
         client.auth().login_access_token(token)
-        print(json.dumps(identifier_secret_names(client, projects), ensure_ascii=True))
+        count, selected = identifier_secret_names(client, projects)
+        print(json.dumps({"count": count, "secrets": selected}, ensure_ascii=True))
         return 0
     except BaseException:
         return 1
@@ -223,17 +233,29 @@ def sdk_secret_names(region, token, projects, env):
             "Credential was found, but the vault request failed or rejected it; child output suppressed."
         )
     try:
-        selected = json.loads(result.stdout)
-        if not isinstance(selected, list) or len(selected) > 100000:
+        report = json.loads(result.stdout)
+        if not isinstance(report, dict) or set(report) != {"count", "secrets"}:
+            raise ValueError
+        count = report["count"]
+        selected = report["secrets"]
+        if (not isinstance(count, int) or isinstance(count, bool)
+                or not isinstance(selected, list) or len(selected) > 100000
+                or count < (1 if selected else 0) or count > len(selected)):
             raise ValueError
         project_ids_by_name = {}
         for project in projects:
             project_ids_by_name.setdefault(project["name"], set()).add(project["id"])
         for item in selected:
-            project_ids = project_ids_by_name.get(item.get("project"))
-            if not project_ids:
+            project = item.get("project")
+            if not isinstance(project, str) or len(project) > 256 or "\x00" in project:
                 raise ValueError
-            expected = {"project", "key", "project_id"} if len(project_ids) > 1 else {"project", "key"}
+            if project.startswith(UNATTRIBUTED_PREFIX):
+                expected = {"project", "key"}
+            else:
+                project_ids = project_ids_by_name.get(project)
+                if not project_ids:
+                    raise ValueError
+                expected = {"project", "key", "project_id"} if len(project_ids) > 1 else {"project", "key"}
             if set(item) != expected:
                 raise ValueError
             if not all(isinstance(item[name], str) and len(item[name]) <= 256 and "\x00" not in item[name]
@@ -243,7 +265,7 @@ def sdk_secret_names(region, token, projects, env):
                 item["project_id"] = str(uuid.UUID(item["project_id"]))
                 if item["project_id"] not in project_ids:
                     raise ValueError
-        rendered = json.dumps(selected, ensure_ascii=True, indent=2)
+        rendered = json.dumps(report, ensure_ascii=True, indent=2)
         if token in rendered:
             raise ValueError
         return rendered

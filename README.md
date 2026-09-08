@@ -26,7 +26,9 @@ scripts/with-bws-token.sh run-approved RECIPE
 
 Authentication returns a fixed status. Project listing returns only IDs and
 names as JSON. Secret-name listing uses the SDK identifier-only endpoint and
-returns project and key names, never values. The token is loaded internally from
+returns the identifier count plus project and key names, never values. Secrets
+whose project cannot be attributed are reported under an `unattributed:` marker,
+never silently dropped. The token is loaded internally from
 the Linux keyring by default. A host without executable keyring support can opt in
 to its already-present environment token with `BWS_ACCESS_TOKEN_SOURCE=environment`.
 Keyring-capable hosts still reject an inherited `BWS_ACCESS_TOKEN`.

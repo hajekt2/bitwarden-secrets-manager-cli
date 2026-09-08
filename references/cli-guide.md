@@ -65,6 +65,10 @@ cloud EU. It uses `bws project list` only for project identifiers and the pinned
 SDK's identifier-only secret listing endpoint for keys. It never invokes the raw
 bulk `bws secret list` command or fetches a value. Output contains project and key
 names. A project ID appears only when duplicate project names need disambiguation.
+The result includes `count`, the number of identifiers the listing returned, so
+completeness is self-checking: a secret whose project is not listed appears under
+an `unattributed:` marker instead of being omitted, and a failed or partial
+listing exits nonzero rather than returning a shortened list.
 
 ## Installation
 
