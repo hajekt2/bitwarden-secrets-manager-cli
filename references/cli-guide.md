@@ -19,26 +19,65 @@ The keyring must be available and unlocked in that identity's session.
 An ordinary desktop keyring does not guarantee unattended access after reboot.
 For services, use an operator-managed unlock mechanism or a separately reviewed
 service credential store. Do not solve startup by exporting the token globally.
-The bundled helper currently supports the Linux keyring only.
+The Linux keyring remains the default and required desktop credential source.
 
 Use these commands to verify access without retrieving secret values:
 
 ```bash
 scripts/check-auth.sh
 scripts/with-bws-token.sh projects
+scripts/with-bws-token.sh secret-names us
 ```
 
-A failed operation returns a fixed error without child stdout/stderr. Check
-keyring availability, machine-account scope, and the operator-owned Bitwarden
-configuration. The wrapper does not accept server or profile overrides from its
-caller. Existing configuration under the operating user's home still applies;
-that home must be inaccessible to agents in an enforced deployment.
+A source failure says that no credential source is available. A request failure
+says that a credential was found but the vault request failed or rejected it.
+Both suppress child stdout and stderr. Check keyring availability, machine-account
+scope, and the operator-owned Bitwarden configuration. The wrapper does not accept
+server or profile overrides from its caller. Existing configuration under the
+operating user's home still applies; that home must be inaccessible to agents in
+an enforced deployment.
+
+## Explicit container environment source
+
+A container that has no executable `/usr/bin/secret-tool` may use a token already
+in its protected environment only when the host explicitly declares that source:
+
+```text
+BWS_ACCESS_TOKEN_SOURCE=environment
+BWS_ACCESS_TOKEN=<operator-supplied machine-account token>
+```
+
+Configure both values through the container platform. Do not type or print the
+token in an agent command, chat, log, shell profile, or committed file. The
+wrapper reads the inherited value without copying it into parent `os.environ`.
+The fixed `bws` child receives a minimal environment containing the token; fixed
+SDK workers receive it through a private pipe or stdin. Unrelated inherited
+variables are excluded, and no token is returned.
+
+This mode is deliberately fail closed. Without the exact source declaration, an
+inherited token is refused. If `/usr/bin/secret-tool` is executable, the inherited
+token is refused even with the declaration. A host with an installed but locked,
+misconfigured, or unreachable keyring must repair the keyring rather than silently
+fall back to the environment source.
+
+Use `secret-names us` for Bitwarden cloud US or `secret-names eu` for Bitwarden
+cloud EU. It uses `bws project list` only for project identifiers and the pinned
+SDK's identifier-only secret listing endpoint for keys. It never invokes the raw
+bulk `bws secret list` command or fetches a value. Output contains project and key
+names. A project ID appears only when duplicate project names need disambiguation.
+The result includes `count`, the number of identifiers the listing returned, so
+completeness is self-checking: a secret whose project is not listed appears under
+an `unattributed:` marker instead of being omitted, and a failed or partial
+listing exits nonzero rather than returning a shortened list.
 
 ## Installation
 
-Python 3 at `/usr/bin/python3`, `secret-tool` at `/usr/bin/secret-tool`, and `bws`
-are required for the Linux helper. It checks `~/.local/bin/bws`,
+Python 3 at `/usr/bin/python3` and `bws` are required for the Linux helper.
+`secret-tool` at `/usr/bin/secret-tool` is required for keyring mode. The helper
+checks `~/.local/bin/bws`,
 `/usr/local/bin/bws`, then `/usr/bin/bws`, without searching the caller's PATH.
+`secret-names`, generated provisioning, and approved operations also require the
+pinned SDK environment described in [generated provisioning](provisioning.md#setup).
 
 `ensure-bws.sh` remains an operator installation helper using Bitwarden's official
 installer. Installing raw `bws` into an unrestricted agent's account does not
@@ -79,7 +118,8 @@ scripts alone cannot prove isolation of the host.
 - `sync-secret-to-vercel.py` is disabled until an operation binds an approved
   secret to an approved destination outside agent control.
 - Inherited `BWS_ACCESS_TOKEN` is rejected. Existing shell/CI integrations must
-  move authentication into the credential handler rather than the agent process.
+  move authentication into the credential handler. The only exception is the
+  explicit container mode above on a host without executable keyring support.
 
 ## Official references
 
