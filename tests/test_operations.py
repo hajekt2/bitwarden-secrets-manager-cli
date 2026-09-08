@@ -41,6 +41,7 @@ class OperationsTests(unittest.TestCase):
             ['bws', 'project', 'list', '--output', 'none', '--server-url', 'https://example.invalid'],
             ['projects', '--server-url', 'https://example.invalid'],
             ['check-auth', '--help'], [],
+            ['secret-names'], ['secret-names', 'ap-south-1'],
         ]
         with patch.object(ops, 'execute') as execute:
             for args in denied:

@@ -320,6 +320,8 @@ def main(args):
         ("bws", "project", "list", "--output", "table"): "projects",
     }
     operation = operation or (args[0] if len(args) == 1 else legacy.get(tuple(args)))
+    if operation == "secret-names" and region is None:
+        operation = None
     if operation not in {"check-auth", "projects", "secret-names"}:
         print("Operation denied. Use check-auth, projects, secret-names REGION, provision-generated RECIPE, or run-approved RECIPE.", file=sys.stderr)
         return 2
