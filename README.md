@@ -10,21 +10,26 @@ credentials to the agent. `bws` is the Secrets Manager CLI, separate from the
 npx skills add hajekt2/bitwarden-secrets-manager-cli -g
 ```
 
-The bundled operation helper currently supports Linux with Python 3 and an
-available user keyring. See [operator setup](references/cli-guide.md).
+The bundled operation helper supports Linux with Python 3. It uses the user
+keyring by default and has an explicit fail-closed container environment mode.
+See [operator setup](references/cli-guide.md).
 
 ## Supported operations
 
 ```bash
 scripts/check-auth.sh
 scripts/with-bws-token.sh projects
+scripts/with-bws-token.sh secret-names REGION
 scripts/with-bws-token.sh provision-generated RECIPE
 scripts/with-bws-token.sh run-approved RECIPE
 ```
 
 Authentication returns a fixed status. Project listing returns only IDs and
-names as JSON. The token is loaded internally from the Linux keyring and supplied
-only to the fixed `bws` child. An inherited `BWS_ACCESS_TOKEN` is rejected.
+names as JSON. Secret-name listing uses the SDK identifier-only endpoint and
+returns project and key names, never values. The token is loaded internally from
+the Linux keyring by default. A host without executable keyring support can opt in
+to its already-present environment token with `BWS_ACCESS_TOKEN_SOURCE=environment`.
+Keyring-capable hosts still reject an inherited `BWS_ACCESS_TOKEN`.
 
 Generated provisioning uses the pinned official Python SDK in a separate worker,
 not `bws secret create`, whose value argument would expose plaintext in process
@@ -69,8 +74,9 @@ bash -n scripts/with-bws-token.sh scripts/check-auth.sh scripts/list-secret-meta
 ```
 
 Tests use synthetic credentials and mock all credential retrieval. They cover
-command rejection, inherited-token rejection, child environment isolation,
-response selection, and failures/timeouts. They do not prove host isolation.
+command rejection, strict keyring-host behavior, explicit container opt-in,
+child environment isolation, identifier-only enumeration, response selection,
+and failures/timeouts. They do not prove host isolation.
 
 ## Files
 

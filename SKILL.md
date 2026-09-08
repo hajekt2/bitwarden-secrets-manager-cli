@@ -18,10 +18,19 @@ Use the bundled operation wrapper on Linux:
 ```bash
 scripts/with-bws-token.sh check-auth
 scripts/with-bws-token.sh projects
+scripts/with-bws-token.sh secret-names REGION
 ```
 
 - `check-auth` makes a read-only project request and returns a fixed status.
 - `projects` returns only project IDs and names as JSON.
+- `secret-names` accepts only `us` or `eu` as `REGION`. It returns each secret
+  key name and project name, sorted as JSON. A project ID is included only when
+  duplicate project names require disambiguation.
+
+`secret-names` first selects project identifiers, then calls the pinned SDK's
+identifier-only `client.secrets().list(organization_id)` endpoint. It never
+invokes `bws secret list` and never calls `client.secrets().get`. The region is
+explicit because the SDK client uses fixed Bitwarden US or EU endpoints.
 - `scripts/check-auth.sh` is an alias for the authentication operation.
 
 ### Create generated secrets
@@ -83,34 +92,46 @@ The legacy `table` form now returns the same selected JSON metadata as `projects
   allows enumeration and exposes the value to the model.
 - Reject `bws run` and arbitrary commands, shells, scripts, executable paths,
   environment dumps, config flags, and server overrides supplied to the wrapper.
-- Never export `BWS_ACCESS_TOKEN` into the agent, parent shell, shell profile,
-  or global environment. The wrapper rejects an inherited non-empty token.
+- Never add `BWS_ACCESS_TOKEN` to an agent, parent shell, shell profile, or
+  global environment. A keyring-capable host rejects an inherited non-empty
+  token, including when environment-token mode was requested.
 - Never use the old `list-secret-metadata.sh`, `safe-bws-run.sh`, or
   `sync-secret-to-vercel.py` interfaces. They fail closed without credential lookup.
   The old Vercel interface accepted arbitrary secret IDs and destinations.
 
 ## Credential handling
 
-The machine-account access token stays in the Linux keyring under
+The default credential source is the Linux keyring entry
 `service bws account access-token`. The wrapper reads it internally with
-`/usr/bin/secret-tool` and passes it only to the fixed `bws` child environment.
-It never writes it to `os.environ` or forwards it to another command.
+`/usr/bin/secret-tool` and passes it only to a fixed Bitwarden CLI or SDK child.
+It never writes the token to `os.environ`, arguments, logs, errors, or results.
+SDK workers receive an opted-in environment token through a private inherited
+file descriptor or stdin, never their environment.
+
+On a container host where `/usr/bin/secret-tool` is not executable, an operator
+may explicitly set `BWS_ACCESS_TOKEN_SOURCE=environment` in the same protected
+container configuration that supplies `BWS_ACCESS_TOKEN`. Both are required.
+This is not a fallback: if `secret-tool` is executable, any inherited token is
+still refused. Do not enable this mode on a desktop or use it to work around a
+locked or failing keyring. See [operator setup](references/cli-guide.md).
 
 `bws` is resolved from known installation locations, not the caller's PATH.
 The child environment excludes unrelated credentials and runtime/config overrides.
 The wrapper captures child output, suppresses raw failure details, and returns
 only the selected operation result. No arbitrary child output is forwarded.
 
-If the keyring is unavailable, report the failure. Ask the user to unlock it in
-their own session. Do not ask for the token or keyring password in chat. See
-[operator setup](references/cli-guide.md) for human-managed credential setup.
+Failures distinguish an unavailable credential source from a vault request that
+failed after a credential was found. Neither case includes child output. On a
+keyring host, ask the user to unlock the keyring in their own session. Do not ask
+for the token or keyring password in chat.
 
 ## Enforcement boundary
 
 These helpers restrict their own interface. They do not sandbox the agent.
 A same-user process with unrestricted shell access can bypass them by reading
 the keyring, running raw `bws`, modifying a helper/config/binary, or calling the
-Bitwarden API itself. Removing `bws` from PATH or adding a denylist is insufficient.
+Bitwarden API itself. In environment-token mode, that process can also read the
+inherited token directly. Removing `bws` from PATH or adding a denylist is insufficient.
 Do not claim wrapper-only access is enforced in that environment.
 
 Protection against an unrestricted or malicious agent requires a credential service outside
