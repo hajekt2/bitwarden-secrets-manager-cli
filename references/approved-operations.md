@@ -119,7 +119,10 @@ the configured absolute result path, then emit exactly `{"exports": {}}`:
 The wrapper rejects extra result fields, mismatched counts, duplicates, control
 characters, values containing any supplied credential, an unowned or
 group-readable result file, a stale file that the current run did not replace,
-an encoded public response over 1 MiB, and any non-empty export. The worker
+an encoded public response over 1 MiB, and any non-empty export. Inventory
+results are capped at 10000 addresses and 1024 characters per address, with a
+1 MiB limit on both the result file and the encoded public response, so a larger
+state fails closed with no public diagnostic. The worker
 announces the validated cleanup path before it can receive or fetch credentials,
 allowing the parent to remove the result after success, failure or forced worker
 termination. Cleanup removes only regular, current-user, mode-0600 files; rejected
