@@ -43,6 +43,10 @@ Approved operations can consume selected secrets and import signing material.
 They execute hash-pinned reviewed scripts, pass credentials through stdin, suppress
 all raw child output, and return only status and imported secret IDs. See
 [operation bindings and retry rules](references/approved-operations.md).
+One explicit result type supports a repeatable OpenTofu `state list` inventory.
+The wrapper reads a pinned mode-0600 result file and returns only resource
+addresses and their count. The reviewed state script stays in the infrastructure
+repository that owns the state.
 
 The wrapper is no longer a general command launcher. Raw secret listing,
 secret retrieval, arbitrary commands, and `bws run` are rejected before keyring

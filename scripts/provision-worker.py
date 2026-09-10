@@ -26,13 +26,17 @@ def main():
     # root or an unrestricted agent capable of replacing this worker.
     if ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) != 0:  # PR_SET_DUMPABLE
         return 1
-    if len(sys.argv) not in (3, 4) or os.environ.get("BWS_ACCESS_TOKEN"):
+    if len(sys.argv) not in (3, 4, 5) or os.environ.get("BWS_ACCESS_TOKEN"):
         return 1
     result_fd = int(sys.argv[2])
     ops = load_module("operations", "bws-operations.py")
-    if len(sys.argv) == 4 and sys.argv[3] not in ("run-approved", "inspect-approved"):
+    mode = sys.argv[-1] if len(sys.argv) >= 4 else None
+    if mode not in (None, "run-approved", "inspect-approved"):
         return 1
-    provisioning = load_module("provisioning", "approved.py" if len(sys.argv) == 4 else "provision.py")
+    if ((len(sys.argv) == 4 and mode != "inspect-approved")
+            or (len(sys.argv) == 5 and mode != "run-approved")):
+        return 1
+    provisioning = load_module("provisioning", "approved.py" if mode else "provision.py")
 
     def login(region):
         from bitwarden_sdk import BitwardenClient, DeviceType, client_settings_from_dict
@@ -60,8 +64,19 @@ def main():
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             return 1
         fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if len(sys.argv) == 4 and sys.argv[3] == 'inspect-approved':
+        if mode == 'inspect-approved':
             result = provisioning.inspect_inputs(home, sys.argv[1], login)
+        elif mode == 'run-approved':
+            announcement_fd = int(sys.argv[3])
+
+            def announce_result(path):
+                payload = json.dumps({"result_path": path}).encode("ascii")
+                if len(payload) > 4096:
+                    raise ValueError
+                os.write(announcement_fd, payload)
+                os.close(announcement_fd)
+
+            result = provisioning.run(home, sys.argv[1], login, announce_result)
         else:
             result = provisioning.run(home, sys.argv[1], login)
     os.write(result_fd, json.dumps(result).encode("ascii"))

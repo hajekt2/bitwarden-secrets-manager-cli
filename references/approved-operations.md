@@ -63,6 +63,75 @@ exceptions, HTTP responses and stderr never reach the agent. The public result
 contains only `completed`/`recorded` and created secret UUIDs. Verify public keys
 and deployment health separately through public/non-secret checks.
 
+## OpenTofu state inventory
+
+The one supported public result is a read-only OpenTofu state inventory. Keep its
+reviewed script in the infrastructure repository that owns the state. Bind the
+script, vault inputs and result file in the recipe:
+
+```json
+{
+  "opentofu-state-inventory": {
+    "script": "/home/haja/work/github.com/hajekt2/cloud-infra/systems/SYSTEM/state-inventory.py",
+    "sha256": "REPLACE_WITH_SCRIPT_SHA256",
+    "region": "us",
+    "inputs": {
+      "state_access": {
+        "secret_id": "11111111-1111-4111-8111-111111111111",
+        "project_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "state_secret": {
+        "secret_id": "22222222-2222-4222-8222-222222222222",
+        "project_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "state_passphrase": {
+        "secret_id": "33333333-3333-4333-8333-333333333333",
+        "project_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    "exports": {},
+    "result": {
+      "type": "opentofu-state-inventory-v1",
+      "path": "/home/haja/work/github.com/hajekt2/cloud-infra/systems/SYSTEM/.state-work/state-inventory.json"
+    }
+  }
+}
+```
+
+The script must pin its system root and `/usr/bin/tofu` in reviewed source. Give
+`tofu state list` only the three mapped state variables in a fixed environment.
+Do not run `plan`, `apply`, `refresh`, `state pull`, `show`, another state
+subcommand or a caller-supplied argument. The root must already have its backend
+initialized. Fail if it does not. Capture raw command output inside the worker,
+write this mode-0600 JSON report to a sibling temporary file, atomically replace
+the configured absolute result path, then emit exactly `{"exports": {}}`:
+
+```json
+{"resource_addresses":["module.example.aws_instance.worker"],"count":1}
+```
+
+`run-approved opentofu-state-inventory` returns this public shape:
+
+```json
+{"status":"completed","result":{"resource_addresses":["module.example.aws_instance.worker"],"count":1}}
+```
+
+The wrapper rejects extra result fields, mismatched counts, duplicates, control
+characters, values containing any supplied credential, an unowned or
+group-readable result file, a stale file that the current run did not replace,
+an encoded public response over 1 MiB, and any non-empty export. Inventory
+results are capped at 10000 addresses and 1024 characters per address, with a
+1 MiB limit on both the result file and the encoded public response, so a larger
+state fails closed with no public diagnostic. The worker
+announces the validated cleanup path before it can receive or fetch credentials,
+allowing the parent to remove the result after success, failure or forced worker
+termination. Cleanup removes only regular, current-user, mode-0600 files; rejected
+foreign or insufficiently private paths are preserved.
+Only the validated public response remains observable through the wrapper. State
+inventory runs are repeatable and
+have no operation receipt because the reviewed command only reads state. A
+changed script, root, command, environment or result path needs a new hash review.
+
 ## Review and tests
 
 Before approving the script hash, inspect all imports, subprocesses, file writes,
@@ -78,8 +147,9 @@ Credentials may persist only at explicitly approved protected runtime destinatio
 
 ## Failure and retry
 
-The wrapper records `pending` before invoking the operation. It runs at most once
-per recorded binding on this controller. Script or import failure may have changed
+A mutating operation records `pending` before its script runs and executes at most
+once per recorded binding on this controller; the state-inventory read records no
+receipt and is repeatable as described above. Script or import failure may have changed
 the remote service; timeout may leave remote work running. Reconcile that state
 before another mutation. Never delete receipts, change aliases, or change bindings
 to bypass uncertainty. An operator can archive a reconciled receipt and authorize

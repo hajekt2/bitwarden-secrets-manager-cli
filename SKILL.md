@@ -1,6 +1,6 @@
 ---
 name: bitwarden-secrets-manager-cli
-description: Check Bitwarden access, create generated secrets, and run approved credential-consuming operations without returning values. Use for bws and Bitwarden-backed deployment or signing-key import.
+description: Check Bitwarden access, create generated secrets, and run approved credential-consuming operations without returning values. Use for bws, Bitwarden-backed deployment, signing-key import, or OpenTofu state inventory.
 ---
 
 # Bitwarden Secrets Manager
@@ -78,6 +78,11 @@ Treat a failed/uncertain write as requiring operator reconciliation. Do not
 delete its receipt or repeat it under another recipe name. A `recorded` result
 means a previous success was recorded locally, not that the secret was fetched
 or checked remotely. Never use this operation for rotation or replacement.
+
+Use `opentofu-state-inventory-v1` only for a reviewed, repeatable OpenTofu state
+inventory. It returns validated resource addresses and their count. Follow the
+exact script and recipe contract in
+[approved operations](references/approved-operations.md).
 
 The wrapper rejects other operations before reading the keyring. It accepts
 only these two exact legacy forms for compatibility:
