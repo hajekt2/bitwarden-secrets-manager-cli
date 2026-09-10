@@ -147,8 +147,9 @@ Credentials may persist only at explicitly approved protected runtime destinatio
 
 ## Failure and retry
 
-The wrapper records `pending` before invoking the operation. It runs at most once
-per recorded binding on this controller. Script or import failure may have changed
+A mutating operation records `pending` before its script runs and executes at most
+once per recorded binding on this controller; the state-inventory read records no
+receipt and is repeatable as described above. Script or import failure may have changed
 the remote service; timeout may leave remote work running. Reconcile that state
 before another mutation. Never delete receipts, change aliases, or change bindings
 to bypass uncertainty. An operator can archive a reconciled receipt and authorize
