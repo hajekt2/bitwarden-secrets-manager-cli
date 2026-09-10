@@ -8,7 +8,9 @@ from pathlib import Path
 import pwd
 import re
 import resource
+import select
 import signal
+import stat
 import subprocess
 import sys
 import uuid
@@ -19,6 +21,8 @@ ENVIRONMENT_TOKEN_SOURCE = "BWS_ACCESS_TOKEN_SOURCE"
 ENVIRONMENT_TOKEN_OPT_IN = "environment"
 MAXIMUM_TOKEN_BYTES = 8192
 UNATTRIBUTED_PREFIX = "unattributed:"
+MAXIMUM_WORKER_RESULT_BYTES = 1048576
+MAXIMUM_RESULT_PATH_MESSAGE_BYTES = 4096
 
 
 class OperationError(Exception):
@@ -301,6 +305,41 @@ def execute(operation, region=None):
     return rendered
 
 
+def receive_result_path(fd):
+    ready, _, _ = select.select([fd], [], [], 30)
+    if not ready:
+        raise OperationError()
+    message = os.read(fd, MAXIMUM_RESULT_PATH_MESSAGE_BYTES + 1)
+    try:
+        if len(message) > MAXIMUM_RESULT_PATH_MESSAGE_BYTES:
+            raise ValueError
+        announcement = json.loads(message)
+        if set(announcement) != {"result_path"}:
+            raise ValueError
+        path = announcement["result_path"]
+        if path is not None and (not isinstance(path, str) or not Path(path).is_absolute()):
+            raise ValueError
+        return path
+    except (ValueError, TypeError, json.JSONDecodeError):
+        raise OperationError() from None
+
+
+def discard_private_result(path):
+    try:
+        info = Path(path).lstat()
+    except FileNotFoundError:
+        return
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_mode & 0o077):
+        return
+    try:
+        Path(path).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        raise OperationError() from None
+
+
 def main(args):
     if len(args) == 2 and args[0] == "secret-names" and args[1] in ("us", "eu"):
         operation, region = "secret-names", args[1]
@@ -363,27 +402,42 @@ def provision_generated(name, approved=False, inspect=False):
         if key in os.environ:
             env[key] = os.environ[key]
     executable = Path(env["HOME"]) / ".local/share/bws-operations/venv/bin/python"
-    read_fd, write_fd = os.pipe()
+    result_fd = os.memfd_create("bws-operation-result", os.MFD_CLOEXEC)
     token_read_fd = token_write_fd = -1
+    cleanup_read_fd = cleanup_write_fd = -1
+    cleanup_path = None
     try:
-        pass_fds = [write_fd]
+        pass_fds = [result_fd]
+        worker_args = [str(executable), "-I", str(Path(__file__).with_name("provision-worker.py")), name, str(result_fd)]
+        if approved and not inspect:
+            cleanup_read_fd, cleanup_write_fd = os.pipe()
+            pass_fds.append(cleanup_write_fd)
+            worker_args.append(str(cleanup_write_fd))
         if token is not None:
             token_read_fd, token_write_fd = os.pipe()
             env["BWS_ACCESS_TOKEN_FD"] = str(token_read_fd)
             pass_fds.append(token_read_fd)
+        if approved:
+            worker_args.append("inspect-approved" if inspect else "run-approved")
         # No secret enters argv or the child environment.
         child = subprocess.Popen(
-            [str(executable), "-I", str(Path(__file__).with_name("provision-worker.py")), name, str(write_fd)] + (["inspect-approved" if inspect else "run-approved"] if approved else []),
+            worker_args,
             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             pass_fds=tuple(pass_fds), start_new_session=True,
         )
-        if token_read_fd >= 0:
-            os.close(token_read_fd)
-            token_read_fd = -1
-            os.write(token_write_fd, token.encode("utf-8"))
-            os.close(token_write_fd)
-            token_write_fd = -1
         try:
+            if cleanup_read_fd >= 0:
+                os.close(cleanup_write_fd)
+                cleanup_write_fd = -1
+                cleanup_path = receive_result_path(cleanup_read_fd)
+                os.close(cleanup_read_fd)
+                cleanup_read_fd = -1
+            if token_read_fd >= 0:
+                os.close(token_read_fd)
+                token_read_fd = -1
+                os.write(token_write_fd, token.encode("utf-8"))
+                os.close(token_write_fd)
+                token_write_fd = -1
             child.wait(timeout=360 if approved else 90)
         finally:
             # Also reap descendants after a successful worker exit. Reviewed
@@ -395,9 +449,10 @@ def provision_generated(name, approved=False, inspect=False):
             child.wait()
         if child.returncode != 0:
             raise OperationError()
-        os.close(write_fd)
-        write_fd = -1
-        result = json.loads(os.read(read_fd, 4096))
+        if os.fstat(result_fd).st_size > MAXIMUM_WORKER_RESULT_BYTES:
+            raise OperationError()
+        os.lseek(result_fd, 0, os.SEEK_SET)
+        result = json.loads(os.read(result_fd, MAXIMUM_WORKER_RESULT_BYTES + 1))
         if inspect:
             if set(result) != {'status','bindings'} or result['status'] != 'bindings' or not isinstance(result['bindings'],list) or len(result['bindings']) > 16:
                 raise OperationError()
@@ -407,17 +462,41 @@ def provision_generated(name, approved=False, inspect=False):
                 item['secret_ids'] = [str(uuid.UUID(v)) for v in item['secret_ids']]
             return json.dumps(result)
         if approved:
+            if set(result) == {"status", "result"} and result["status"] == "completed":
+                if cleanup_path is None:
+                    raise OperationError()
+                inventory = result["result"]
+                if (not isinstance(inventory, dict)
+                        or set(inventory) != {"resource_addresses", "count"}
+                        or not isinstance(inventory["resource_addresses"], list)
+                        or len(inventory["resource_addresses"]) > 10000
+                        or not isinstance(inventory["count"], int)
+                        or isinstance(inventory["count"], bool)
+                        or inventory["count"] != len(inventory["resource_addresses"])):
+                    raise OperationError()
+                for address in inventory["resource_addresses"]:
+                    if (not isinstance(address, str) or not address or len(address) > 1024
+                            or any(ord(character) < 32 or ord(character) == 127 for character in address)):
+                        raise OperationError()
+                if len(set(inventory["resource_addresses"])) != inventory["count"]:
+                    raise OperationError()
+                return json.dumps({"status": "completed", "result": inventory}, ensure_ascii=True)
             if (set(result) != {"status", "secret_ids"} or result["status"] not in ("completed", "recorded")
-                    or not isinstance(result["secret_ids"], list) or len(result["secret_ids"]) > 16):
+                    or cleanup_path is not None or not isinstance(result["secret_ids"], list)
+                    or len(result["secret_ids"]) > 16):
                 raise OperationError()
             return json.dumps({"status": result["status"], "secret_ids": [str(uuid.UUID(v)) for v in result["secret_ids"]]})
         if set(result) != {"status", "secret_id"} or result["status"] not in ("created", "recorded"):
             raise OperationError()
         return json.dumps({"status": result["status"], "secret_id": str(uuid.UUID(result["secret_id"]))})
     finally:
-        os.close(read_fd)
-        if write_fd >= 0:
-            os.close(write_fd)
+        if cleanup_path is not None:
+            discard_private_result(cleanup_path)
+        os.close(result_fd)
+        if cleanup_read_fd >= 0:
+            os.close(cleanup_read_fd)
+        if cleanup_write_fd >= 0:
+            os.close(cleanup_write_fd)
         if token_read_fd >= 0:
             os.close(token_read_fd)
         if token_write_fd >= 0:

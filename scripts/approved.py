@@ -13,6 +13,9 @@ import sys
 import uuid
 
 
+MAXIMUM_WORKER_RESULT_BYTES = 1048576
+
+
 class ApprovedError(Exception):
     pass
 
@@ -33,12 +36,13 @@ def read_private(path, maximum=65536):
         return stream.read(maximum + 1)
 
 
-def load_recipe(home, name):
+def load_recipe(home, name, announce_result=None):
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", name):
         raise ApprovedError()
     config = json.loads(read_private(home / ".config/bws-operations/approved.json"))
     recipe = config[name]
-    if set(recipe) != {"script", "sha256", "region", "inputs", "exports"}:
+    required = {"script", "sha256", "region", "inputs", "exports"}
+    if set(recipe) not in (required, required | {"result"}):
         raise ApprovedError()
     if recipe["region"] not in ("us", "eu") or not Path(recipe["script"]).is_absolute():
         raise ApprovedError()
@@ -67,6 +71,18 @@ def load_recipe(home, name):
     destinations = [(v["project_id"], v["secret_name"]) for v in recipe["exports"].values()]
     if len(destinations) != len(set(destinations)):
         raise ApprovedError()
+    if "result" in recipe:
+        result = recipe["result"]
+        if (set(result) != {"type", "path"}
+                or result["type"] != "opentofu-state-inventory-v1"
+                or not isinstance(result["path"], str)
+                or not Path(result["path"]).is_absolute()
+                or Path(result["path"]).resolve() == Path(recipe["script"]).resolve()
+                or set(recipe["inputs"]) != {"state_access", "state_secret", "state_passphrase"}
+                or recipe["exports"]):
+            raise ApprovedError()
+    if announce_result is not None:
+        announce_result(recipe["result"]["path"] if "result" in recipe else None)
     # Execute these exact reviewed bytes, not a path reopened after verification.
     script = read_private(Path(recipe["script"]))
     if hashlib.sha256(script).hexdigest() != recipe["sha256"]:
@@ -97,16 +113,91 @@ def execute_script(script, inputs):
     return response["exports"]
 
 
+def read_state_inventory(path, inputs):
+    report = json.loads(read_private(Path(path), maximum=1048576))
+    if set(report) != {"resource_addresses", "count"}:
+        raise ApprovedError()
+    addresses = report["resource_addresses"]
+    if (not isinstance(addresses, list) or len(addresses) > 10000
+            or not isinstance(report["count"], int) or isinstance(report["count"], bool)
+            or report["count"] != len(addresses)):
+        raise ApprovedError()
+    for address in addresses:
+        if (not isinstance(address, str) or not address or len(address) > 1024
+                or any(ord(character) < 32 or ord(character) == 127 for character in address)
+                or contains_secret(address, inputs.values())):
+            raise ApprovedError()
+    if len(set(addresses)) != len(addresses):
+        raise ApprovedError()
+    return {"resource_addresses": addresses, "count": len(addresses)}
+
+
+def contains_secret(address, secrets):
+    if any(secret in address for secret in secrets):
+        return True
+    decoder = json.JSONDecoder()
+    offset = 0
+    while True:
+        quote = address.find('"', offset)
+        if quote < 0:
+            return False
+        try:
+            value, length = decoder.raw_decode(address[quote:])
+        except json.JSONDecodeError:
+            raise ApprovedError() from None
+        if not isinstance(value, str) or any(secret in value for secret in secrets):
+            return True
+        offset = quote + length
+
+
+def private_file_identity(path):
+    try:
+        info = Path(path).lstat()
+    except FileNotFoundError:
+        return None
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_mode & 0o077):
+        raise ApprovedError()
+    return info.st_dev, info.st_ino
+
+
+def discard_result(path):
+    try:
+        identity = private_file_identity(path)
+    except ApprovedError:
+        return
+    if identity is None:
+        return
+    try:
+        Path(path).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        raise ApprovedError() from None
+
+
 def perform(client, recipe, script, journal, execute=execute_script, login=None):
-    journal.seek(0)
-    previous = journal.read()
-    if previous:
-        if not previous.endswith("\n"):
-            raise ApprovedError()
-        receipt = json.loads(previous.splitlines()[-1])
-        if receipt.get("binding") != recipe or receipt.get("status") != "completed":
-            raise ApprovedError()
-        return {"status": "recorded", "secret_ids": [uuid_text(v) for v in receipt["secret_ids"]]}
+    result_spec = recipe.get("result")
+    try:
+        return _perform_operation(client, recipe, script, journal, execute, login)
+    finally:
+        if result_spec is not None:
+            discard_result(result_spec["path"])
+
+
+def _perform_operation(client, recipe, script, journal, execute, login):
+    result_spec = recipe.get("result")
+    previous_result = private_file_identity(result_spec["path"]) if result_spec else None
+    if result_spec is None:
+        journal.seek(0)
+        previous = journal.read()
+        if previous:
+            if not previous.endswith("\n"):
+                raise ApprovedError()
+            receipt = json.loads(previous.splitlines()[-1])
+            if receipt.get("binding") != recipe or receipt.get("status") != "completed":
+                raise ApprovedError()
+            return {"status": "recorded", "secret_ids": [uuid_text(v) for v in receipt["secret_ids"]]}
 
     if login is not None:
         client = login(recipe["region"])
@@ -148,12 +239,24 @@ def perform(client, recipe, script, journal, execute=execute_script, login=None)
         journal.flush()
         os.fsync(journal.fileno())
 
-    # Persist uncertainty BEFORE the script can mutate a deployment. A timeout
-    # may leave a remote operation running; never automatically repeat it.
-    save("pending", [])
+    # Mutating operations persist uncertainty before the script runs. The one
+    # supported result operation is reviewed as a repeatable state-list read.
+    if result_spec is None:
+        save("pending", [])
     exports = execute(script, inputs)
     if set(exports) != set(destinations):
         raise ApprovedError()
+    if result_spec is not None:
+        current_result = private_file_identity(result_spec["path"])
+        if current_result is None or current_result == previous_result:
+            raise ApprovedError()
+        response = {
+            "status": "completed",
+            "result": read_state_inventory(result_spec["path"], inputs),
+        }
+        if len(json.dumps(response, ensure_ascii=True).encode("ascii")) > MAXIMUM_WORKER_RESULT_BYTES:
+            raise ApprovedError()
+        return response
     ids = []
     for name, spec in recipe["exports"].items():
         value = exports[name]
@@ -170,8 +273,10 @@ def perform(client, recipe, script, journal, execute=execute_script, login=None)
     return {"status": "completed", "secret_ids": ids}
 
 
-def run(home, name, login):
-    recipe, script = load_recipe(home, name)
+def run(home, name, login, announce_result=None):
+    recipe, script = load_recipe(home, name, announce_result)
+    if "result" in recipe:
+        return perform(None, recipe, script, None, login=login)
     state = home / ".local/state/bws-operations"
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = state.lstat()
