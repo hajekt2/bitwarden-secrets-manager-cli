@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fixed operations with selected results. This same-user helper is not a sandbox."""
 
+import argparse
 import ctypes
 import json
 import os
@@ -340,7 +341,71 @@ def discard_private_result(path):
         raise OperationError() from None
 
 
+def run_script(args):
+    """Inject selected application secrets into any requested command."""
+    parser = argparse.ArgumentParser(prog="with-bws-token.sh run")
+    parser.add_argument("--secret", action="append", default=[], metavar="ENV=UUID")
+    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    options = parser.parse_args(args)
+    command = options.command
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command or not options.secret or options.timeout <= 0:
+        raise OperationError("Specify --secret ENV=UUID, a positive timeout, and -- COMMAND.")
+    bindings = {}
+    for binding in options.secret:
+        name, separator, identifier = binding.partition("=")
+        if (not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                or name.startswith("BWS_") or name in bindings):
+            raise OperationError("Invalid or duplicate secret environment binding.")
+        try:
+            bindings[name] = str(uuid.UUID(identifier))
+        except ValueError:
+            raise OperationError("Secret bindings require UUIDs.") from None
+    env = command_environment()
+    executable = bws_executable(env)
+    token = credential_token(env)
+    child_env = {key: value for key, value in os.environ.items() if not key.startswith("BWS_")}
+    for name, identifier in bindings.items():
+        try:
+            secret = json.loads(run_captured(
+                [executable, "secret", "get", identifier, "--output", "json"],
+                {**env, "BWS_ACCESS_TOKEN": token},
+            ))
+            if str(uuid.UUID(secret["id"])) != identifier or not isinstance(secret["value"], str):
+                raise ValueError
+            child_env[name] = secret["value"]
+        except (ValueError, TypeError, KeyError, AttributeError, UnicodeError):
+            raise OperationError("Invalid secret response; output suppressed.") from None
+    # Secret values never enter argv or a file. Discard streams even on failure.
+    child = subprocess.Popen(
+        command, env=child_env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+    try:
+        code = child.wait(timeout=options.timeout)
+    finally:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait()
+    if code != 0:
+        raise OperationError("Script failed; output suppressed.")
+    return '{"status": "completed"}'
+
+
 def main(args):
+    if args and args[0] == "run":
+        try:
+            print(run_script(args[1:]))
+            return 0
+        except SystemExit as error:
+            return error.code
+        except Exception:
+            print("Script operation failed; output suppressed. Check the task result before retrying writes.", file=sys.stderr)
+            return 1
     if len(args) == 2 and args[0] == "secret-names" and args[1] in ("us", "eu"):
         operation, region = "secret-names", args[1]
     else:
@@ -384,7 +449,7 @@ def main(args):
     if operation == "secret-names" and region is None:
         operation = None
     if operation not in {"check-auth", "projects", "secret-names"}:
-        print("Operation denied. Use check-auth, projects, secret-names REGION, provision-generated RECIPE, or run-approved RECIPE.", file=sys.stderr)
+        print("Operation denied. Use check-auth, projects, secret-names REGION, provision-generated RECIPE, run --secret ENV=UUID -- COMMAND, or run-approved RECIPE.", file=sys.stderr)
         return 2
     try:
         print(execute(operation, region))

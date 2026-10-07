@@ -111,10 +111,12 @@ scripts alone cannot prove isolation of the host.
 
 ## Compatibility changes
 
-- Raw `secret list` and `secret get` are rejected, even with output filtering.
+- Direct raw `secret list` and `secret get` calls through the wrapper are rejected.
+  The `run --secret ENV=UUID -- COMMAND` operation fetches selected values internally
+  and injects them into any agent-selected command without recipe or hash approval.
 - `list-secret-metadata.sh` is disabled because its implementation fetched all values.
-- `safe-bws-run.sh` is disabled. Its executable-name allowlist permitted commands
-  and project code that could print or send secrets elsewhere.
+- The old `safe-bws-run.sh` interface remains disabled. Use the direct `run`
+  operation instead; it accepts arbitrary commands and suppresses their output.
 - `sync-secret-to-vercel.py` is disabled until an operation binds an approved
   secret to an approved destination outside agent control.
 - Inherited `BWS_ACCESS_TOKEN` is rejected. Existing shell/CI integrations must

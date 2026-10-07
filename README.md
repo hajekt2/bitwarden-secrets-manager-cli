@@ -10,9 +10,8 @@ credentials to the agent. `bws` is the Secrets Manager CLI, separate from the
 npx skills add hajekt2/bitwarden-secrets-manager-cli -g
 ```
 
-The bundled operation helper supports Linux with Python 3. It uses the user
-keyring by default and has an explicit fail-closed container environment mode.
-See [operator setup](references/cli-guide.md).
+The bundled operation helper currently supports Linux with Python 3 and an
+available user keyring. See [operator setup](references/cli-guide.md).
 
 ## Supported operations
 
@@ -25,13 +24,11 @@ scripts/with-bws-token.sh run-approved RECIPE
 ```
 
 Authentication returns a fixed status. Project listing returns only IDs and
-names as JSON. Secret-name listing uses the SDK identifier-only endpoint and
-returns the identifier count plus project and key names, never values. Secrets
-whose project cannot be attributed are reported under an `unattributed:` marker,
-never silently dropped. The token is loaded internally from
-the Linux keyring by default. A host without executable keyring support can opt in
-to its already-present environment token with `BWS_ACCESS_TOKEN_SOURCE=environment`.
-Keyring-capable hosts still reject an inherited `BWS_ACCESS_TOKEN`.
+names as JSON. The token is loaded internally from the Linux keyring and supplied
+only to the internal `bws` child. Keyring-capable hosts reject inherited tokens.
+Containers without executable keyring support may explicitly opt into an existing
+token with `BWS_ACCESS_TOKEN_SOURCE=environment`. Secret-name listing uses the SDK
+identifier-only endpoint without retrieving values.
 
 Generated provisioning uses the pinned official Python SDK in a separate worker,
 not `bws secret create`, whose value argument would expose plaintext in process
@@ -39,24 +36,26 @@ arguments. It accepts an approved recipe and returns a receipt ID, never values.
 See [setup and retry rules](references/provisioning.md). It does not import or
 export existing secrets and does not install an isolated credential service.
 
-Approved operations can consume selected secrets and import signing material.
-They execute hash-pinned reviewed scripts, pass credentials through stdin, suppress
-all raw child output, and return only status and imported secret IDs. See
-[operation bindings and retry rules](references/approved-operations.md).
-One explicit result type supports a repeatable OpenTofu `state list` inventory.
-The wrapper reads a pinned mode-0600 result file and returns only resource
-addresses and their count. The reviewed state script stays in the infrastructure
-repository that owns the state.
+## Run any credential-consuming script
 
-The wrapper is no longer a general command launcher. Raw secret listing,
-secret retrieval, arbitrary commands, and `bws run` are rejected before keyring
-access. Former metadata-listing, generic injection, and arbitrary Vercel sync
-helpers remain as compatibility entry points that fail closed.
+```bash
+scripts/with-bws-token.sh run --secret API_TOKEN=11111111-2222-3333-4444-555555555555 -- python3 /absolute/path/task.py
+```
 
-To add secret-consuming work, implement a named operation with an approved
-secret and destination binding. Fetch credentials inside its private worker, pass them
-only to the intended child, and return selected results or fixed status. Do not
-provide an API that returns a key or accepts an arbitrary command.
+The agent chooses the command and binds each needed secret UUID to an environment
+variable. No recipe, script allowlist, hash pin, version pin, or separate script
+approval is required. Task authorization still applies to external and destructive
+actions. The machine-account token is never passed to the application.
+
+Command output is discarded and only a fixed status is returned. The default
+300-second timeout can be changed with `--timeout SECONDS`. The command inherits
+the caller environment except `BWS_*`. This is intended for foreground tasks;
+the process group is terminated when the command ends. Arbitrary commands can
+use or disclose injected credentials, so this interface is not an isolation boundary.
+
+Legacy hash-pinned recipe operations remain available for existing workflows.
+Their requirements apply only to `run-approved`, not to `run`. The existing
+OpenTofu state-inventory result contract and private result cleanup are preserved.
 
 ## Security boundary
 
@@ -80,9 +79,8 @@ bash -n scripts/with-bws-token.sh scripts/check-auth.sh scripts/list-secret-meta
 ```
 
 Tests use synthetic credentials and mock all credential retrieval. They cover
-command rejection, strict keyring-host behavior, explicit container opt-in,
-child environment isolation, identifier-only enumeration, response selection,
-and failures/timeouts. They do not prove host isolation.
+command rejection, inherited-token rejection, child environment isolation,
+response selection, and failures/timeouts. They do not prove host isolation.
 
 ## Files
 
