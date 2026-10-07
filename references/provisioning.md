@@ -52,13 +52,17 @@ approving the actual recipe. Do not place credentials in arguments or recipes.
 
 ## Data boundary
 
-The worker obtains the access token internally from the Linux keyring, generates
-values in memory and calls the SDK directly. Values never enter process arguments,
-the parent environment, a temporary file, or the parent interpreter. No SDK
-authentication state file is requested. Worker stdout/stderr go to `/dev/null`,
-including native library output. An independent pipe carries only status and a
-UUID, which the parent validates before rendering. Core dumps are disabled and
-the worker sets Linux `PR_SET_DUMPABLE=0` before credential access.
+The worker obtains the access token from the Linux keyring by default. In the
+explicit container environment mode documented in [operator setup](cli-guide.md#explicit-container-environment-source),
+the parent passes the already-inherited token to the fixed worker through a
+private inherited file descriptor. It never places the token in the worker
+environment or arguments. The worker generates values in memory and calls the
+SDK directly. Values never enter process arguments, the parent environment, a
+temporary file, or the parent interpreter. No SDK authentication state file is
+requested. Worker stdout/stderr go to `/dev/null`, including native library
+output. An independent pipe carries only status and a UUID, which the parent
+validates before rendering. Core dumps are disabled and the worker sets Linux
+`PR_SET_DUMPABLE=0` before credential access.
 
 The SDK identifiers endpoint is used internally to refuse an existing secret
 name. It returns identifiers, not secret values. This is not the raw CLI

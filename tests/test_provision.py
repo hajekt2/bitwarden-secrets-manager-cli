@@ -122,10 +122,42 @@ class ProvisionTests(unittest.TestCase):
                 self.assertEqual(ops.main(args), 2)
             worker.assert_not_called()
 
-    def test_inherited_token_rejected(self):
-        with patch.dict(os.environ, {'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET'}), patch.object(ops.subprocess, 'Popen') as child:
+    def test_inherited_token_rejected_on_keyring_host(self):
+        variables = {'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET', 'BWS_ACCESS_TOKEN_SOURCE': 'environment'}
+        with patch.dict(os.environ, variables), patch.object(ops, 'keyring_available', return_value=True), patch.object(ops.subprocess, 'Popen') as child:
             with self.assertRaises(ops.OperationError): ops.provision_generated('example')
             child.assert_not_called()
+
+    def test_missing_container_source_reports_source_failure(self):
+        variables = {'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET'}
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=False), patch.object(ops.subprocess, 'Popen') as child, contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            self.assertEqual(ops.main(['run-approved', 'example']), 1)
+        child.assert_not_called()
+        self.assertIn('No credential source is available', stderr.getvalue())
+        self.assertNotIn('SYNTHETIC_SECRET', stdout.getvalue() + stderr.getvalue())
+
+    def test_opted_in_environment_token_reaches_worker_only_by_private_fd(self):
+        captured_token_fds = []
+
+        def child(argv, **kwargs):
+            token_fd = int(kwargs['env']['BWS_ACCESS_TOKEN_FD'])
+            self.assertIn(token_fd, kwargs['pass_fds'])
+            self.assertNotIn('BWS_ACCESS_TOKEN', kwargs['env'])
+            self.assertNotIn('BWS_ACCESS_TOKEN_SOURCE', kwargs['env'])
+            captured_token_fds.append(os.dup(token_fd))
+            os.write(kwargs['pass_fds'][0], json.dumps({'status':'created','secret_id':SECRET}).encode())
+            return Obj(returncode=0, pid=12345, wait=Mock())
+        variables = {
+            'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET',
+            'BWS_ACCESS_TOKEN_SOURCE': 'environment',
+            'OTHER_SECRET': 'unrelated',
+        }
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=False), patch.object(ops.subprocess, 'Popen', side_effect=child) as launch, patch.object(ops.os, 'killpg'):
+            result = ops.provision_generated('example')
+            self.assertEqual(os.read(captured_token_fds[0], 8192), b'SYNTHETIC_SECRET')
+            os.close(captured_token_fds[0])
+        self.assertEqual(json.loads(result), {'status':'created','secret_id':SECRET})
 
     def test_parent_suppresses_streams_and_filters_receipt(self):
         def child(argv, **kwargs):

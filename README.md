@@ -18,13 +18,17 @@ available user keyring. See [operator setup](references/cli-guide.md).
 ```bash
 scripts/check-auth.sh
 scripts/with-bws-token.sh projects
+scripts/with-bws-token.sh secret-names REGION
 scripts/with-bws-token.sh provision-generated RECIPE
 scripts/with-bws-token.sh run-approved RECIPE
 ```
 
 Authentication returns a fixed status. Project listing returns only IDs and
 names as JSON. The token is loaded internally from the Linux keyring and supplied
-only to the internal `bws` child. An inherited `BWS_ACCESS_TOKEN` is rejected.
+only to the internal `bws` child. Keyring-capable hosts reject inherited tokens.
+Containers without executable keyring support may explicitly opt into an existing
+token with `BWS_ACCESS_TOKEN_SOURCE=environment`. Secret-name listing uses the SDK
+identifier-only endpoint without retrieving values.
 
 Generated provisioning uses the pinned official Python SDK in a separate worker,
 not `bws secret create`, whose value argument would expose plaintext in process
@@ -50,7 +54,8 @@ the process group is terminated when the command ends. Arbitrary commands can
 use or disclose injected credentials, so this interface is not an isolation boundary.
 
 Legacy hash-pinned recipe operations remain available for existing workflows.
-Their requirements apply only to `run-approved`, not to `run`.
+Their requirements apply only to `run-approved`, not to `run`. The existing
+OpenTofu state-inventory result contract and private result cleanup are preserved.
 
 ## Security boundary
 

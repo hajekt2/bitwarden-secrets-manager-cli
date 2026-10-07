@@ -47,11 +47,17 @@ state before retrying.
 ```bash
 scripts/with-bws-token.sh check-auth
 scripts/with-bws-token.sh projects
+scripts/with-bws-token.sh secret-names REGION
 ```
 
 `check-auth` returns a fixed read-only status. `projects` returns project IDs and
-names. An inherited non-empty `BWS_ACCESS_TOKEN` is rejected. If the keyring is
-locked, ask the user to unlock it in their own session, never to paste credentials.
+names. `secret-names us` or `secret-names eu` returns secret key names and
+project names through the SDK identifier-only endpoint, without values.
+
+Keyring-capable hosts reject an inherited non-empty `BWS_ACCESS_TOKEN`. Containers
+without executable keyring support can explicitly opt into an existing token with
+`BWS_ACCESS_TOKEN_SOURCE=environment`. The token is still excluded from the
+application environment. If the keyring is locked, ask the user to unlock it in their own session, never to paste credentials.
 See [operator setup](references/cli-guide.md).
 
 Existing `provision-generated RECIPE`, `run-approved RECIPE`, and
@@ -59,6 +65,9 @@ Existing `provision-generated RECIPE`, `run-approved RECIPE`, and
 Their recipe validation applies only to those legacy operations, not to `run`.
 See [generated provisioning](references/provisioning.md) and
 [recipe operations](references/approved-operations.md) when using them.
+
+`run-approved` also supports the existing repeatable `opentofu-state-inventory-v1`
+result contract. Its validation and private result-file cleanup remain unchanged.
 
 ## Boundary
 
