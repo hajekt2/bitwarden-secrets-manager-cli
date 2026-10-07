@@ -24,7 +24,7 @@ scripts/with-bws-token.sh run-approved RECIPE
 
 Authentication returns a fixed status. Project listing returns only IDs and
 names as JSON. The token is loaded internally from the Linux keyring and supplied
-only to the fixed `bws` child. An inherited `BWS_ACCESS_TOKEN` is rejected.
+only to the internal `bws` child. An inherited `BWS_ACCESS_TOKEN` is rejected.
 
 Generated provisioning uses the pinned official Python SDK in a separate worker,
 not `bws secret create`, whose value argument would expose plaintext in process
@@ -32,20 +32,25 @@ arguments. It accepts an approved recipe and returns a receipt ID, never values.
 See [setup and retry rules](references/provisioning.md). It does not import or
 export existing secrets and does not install an isolated credential service.
 
-Approved operations can consume selected secrets and import signing material.
-They execute hash-pinned reviewed scripts, pass credentials through stdin, suppress
-all raw child output, and return only status and imported secret IDs. See
-[operation bindings and retry rules](references/approved-operations.md).
+## Run any credential-consuming script
 
-The wrapper is no longer a general command launcher. Raw secret listing,
-secret retrieval, arbitrary commands, and `bws run` are rejected before keyring
-access. Former metadata-listing, generic injection, and arbitrary Vercel sync
-helpers remain as compatibility entry points that fail closed.
+```bash
+scripts/with-bws-token.sh run --secret API_TOKEN=11111111-2222-3333-4444-555555555555 -- python3 /absolute/path/task.py
+```
 
-To add secret-consuming work, implement a named operation with an approved
-secret and destination binding. Fetch credentials inside its private worker, pass them
-only to the intended child, and return selected results or fixed status. Do not
-provide an API that returns a key or accepts an arbitrary command.
+The agent chooses the command and binds each needed secret UUID to an environment
+variable. No recipe, script allowlist, hash pin, version pin, or separate script
+approval is required. Task authorization still applies to external and destructive
+actions. The machine-account token is never passed to the application.
+
+Command output is discarded and only a fixed status is returned. The default
+300-second timeout can be changed with `--timeout SECONDS`. The command inherits
+the caller environment except `BWS_*`. This is intended for foreground tasks;
+the process group is terminated when the command ends. Arbitrary commands can
+use or disclose injected credentials, so this interface is not an isolation boundary.
+
+Legacy hash-pinned recipe operations remain available for existing workflows.
+Their requirements apply only to `run-approved`, not to `run`.
 
 ## Security boundary
 
