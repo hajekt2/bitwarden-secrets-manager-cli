@@ -18,7 +18,7 @@ VALUE = 'synthetic-application-secret'
 class RunTests(unittest.TestCase):
     def invoke(self, command):
         out, err = io.StringIO(), io.StringIO()
-        with patch.dict(os.environ, {'PATH': '/usr/bin:/bin', 'BWS_SERVER_URL': 'ignored'}, clear=True), patch.object(ops, 'bws_executable', return_value='/trusted/bws'), patch.object(ops, 'keyring_token', return_value='synthetic-machine-token'), patch.object(ops, 'run_captured', return_value=json.dumps({'id': ID, 'value': VALUE}).encode()) as fetch, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with patch.dict(os.environ, {'PATH': '/usr/bin:/bin', 'BWS_SERVER_URL': 'ignored'}, clear=True), patch.object(ops, 'bws_executable', return_value='/trusted/bws'), patch.object(ops, 'credential_token', return_value='synthetic-machine-token'), patch.object(ops, 'run_captured', return_value=json.dumps({'id': ID, 'value': VALUE}).encode()) as fetch, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = ops.main(['run', '--secret', 'API_TOKEN=' + ID, '--', sys.executable, '-c', command])
         self.assertNotIn(VALUE, out.getvalue() + err.getvalue())
         self.assertNotIn('synthetic-machine-token', out.getvalue() + err.getvalue())
@@ -44,7 +44,7 @@ class RunTests(unittest.TestCase):
 
     def test_timeout_output_suppressed(self):
         out, err = io.StringIO(), io.StringIO()
-        with patch.dict(os.environ, {}, clear=True), patch.object(ops, 'bws_executable', return_value='/trusted/bws'), patch.object(ops, 'keyring_token', return_value='synthetic-machine-token'), patch.object(ops, 'run_captured', return_value=json.dumps({'id': ID, 'value': VALUE}).encode()), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with patch.dict(os.environ, {}, clear=True), patch.object(ops, 'bws_executable', return_value='/trusted/bws'), patch.object(ops, 'credential_token', return_value='synthetic-machine-token'), patch.object(ops, 'run_captured', return_value=json.dumps({'id': ID, 'value': VALUE}).encode()), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = ops.main(['run', '--secret', 'API_TOKEN=' + ID, '--timeout', '1', '--', sys.executable, '-c', 'import time; time.sleep(10)'])
         self.assertEqual(code, 1)
         self.assertNotIn(VALUE, out.getvalue() + err.getvalue())
