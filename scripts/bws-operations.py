@@ -104,24 +104,34 @@ def keyring_available():
     return KEYRING_EXECUTABLE.is_file() and os.access(KEYRING_EXECUTABLE, os.X_OK)
 
 
+def environment_source_declared():
+    return os.environ.get(ENVIRONMENT_TOKEN_SOURCE) == ENVIRONMENT_TOKEN_OPT_IN
+
+
 def credential_token(env):
+    # An operator declaration is authoritative on any host, so an unattended host
+    # can use a protected environment credential instead of an interactive keyring.
     inherited = os.environ.get("BWS_ACCESS_TOKEN")
+    declared = environment_source_declared()
+    if declared and inherited:
+        return usable_token(inherited, "environment")
     if not inherited:
         if not keyring_available():
             raise CredentialSourceError(
                 "No credential source is available on this host. Linux keyring support is unavailable."
             )
         return keyring_token(env)
-    if keyring_available():
-        raise CredentialSourceError(
-            "Inherited BWS_ACCESS_TOKEN denied. This host has Linux keyring support; use the keyring credential."
-        )
-    if os.environ.get(ENVIRONMENT_TOKEN_SOURCE) != ENVIRONMENT_TOKEN_OPT_IN:
+    # Fail closed: an inherited token without the exact declaration is always refused.
+    if not keyring_available():
         raise CredentialSourceError(
             "No credential source is available on this host. Linux keyring support is unavailable and "
-            f"{ENVIRONMENT_TOKEN_SOURCE}=environment is not enabled."
+            f"{ENVIRONMENT_TOKEN_SOURCE}={ENVIRONMENT_TOKEN_OPT_IN} is not enabled."
         )
-    return usable_token(inherited, "environment")
+    raise CredentialSourceError(
+        "Inherited BWS_ACCESS_TOKEN denied. Declare "
+        f"{ENVIRONMENT_TOKEN_SOURCE}={ENVIRONMENT_TOKEN_OPT_IN} to use an environment credential, "
+        "or unset the token to use the keyring credential."
+    )
 
 
 def bws_executable(env):
@@ -462,7 +472,7 @@ def main(args):
 def provision_generated(name, approved=False, inspect=False):
     env = command_environment()
     inherited_token = os.environ.get("BWS_ACCESS_TOKEN")
-    token = credential_token(env) if inherited_token or os.environ.get(ENVIRONMENT_TOKEN_SOURCE) == ENVIRONMENT_TOKEN_OPT_IN else None
+    token = credential_token(env) if inherited_token or environment_source_declared() else None
     for key in ("DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "DISPLAY", "XAUTHORITY"):
         if key in os.environ:
             env[key] = os.environ[key]

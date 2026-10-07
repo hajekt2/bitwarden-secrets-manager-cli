@@ -10,8 +10,9 @@ credentials to the agent. `bws` is the Secrets Manager CLI, separate from the
 npx skills add hajekt2/bitwarden-secrets-manager-cli -g
 ```
 
-The bundled operation helper currently supports Linux with Python 3 and an
-available user keyring. See [operator setup](references/cli-guide.md).
+The bundled operation helper currently supports Linux with Python 3 and either an
+available user keyring or an operator-declared environment credential. See
+[operator setup](references/cli-guide.md).
 
 ## Supported operations
 
@@ -24,10 +25,10 @@ scripts/with-bws-token.sh run-approved RECIPE
 ```
 
 Authentication returns a fixed status. Project listing returns only IDs and
-names as JSON. The token is loaded internally from the Linux keyring and supplied
-only to the internal `bws` child. Keyring-capable hosts reject inherited tokens.
-Containers without executable keyring support may explicitly opt into an existing
-token with `BWS_ACCESS_TOKEN_SOURCE=environment`. Secret-name listing uses the SDK
+names as JSON. The token is loaded internally, from the Linux keyring by default,
+and supplied only to the internal `bws` child. An operator declares an inherited
+token as the credential with `BWS_ACCESS_TOKEN_SOURCE=environment`; without that
+declaration an inherited `BWS_ACCESS_TOKEN` is refused. Secret-name listing uses the SDK
 identifier-only endpoint without retrieving values.
 
 Generated provisioning uses the pinned official Python SDK in a separate worker,

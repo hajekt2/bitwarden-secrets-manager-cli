@@ -34,7 +34,7 @@ secret strings. Parse nested JSON bundles internally when necessary. It receives
 no Bitwarden token and no inherited environment, credential variables, Python
 hooks or proxy overrides. Its environment contains only a fixed PATH and locale.
 The SDK worker reads the token from the Linux keyring by default. In the explicit
-container environment mode, the wrapper transfers the already-inherited token to
+environment source mode, the wrapper transfers the already-inherited token to
 that fixed worker through a private file descriptor, never through its environment
 or arguments. The reviewed operation script still receives no Bitwarden token.
 Use absolute executable paths and bind destination hosts, paths and accounts in

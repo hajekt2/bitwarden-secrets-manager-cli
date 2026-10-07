@@ -27,8 +27,9 @@ directory, using the wrapper's absolute path when needed.
 
 The command inherits the caller's environment except `BWS_*` variables. The
 Bitwarden machine-account token goes only to the internal `bws` requests, never
-to the application command. The token is read from the Linux keyring under
-`service bws account access-token`.
+to the application command. The token comes from the Linux keyring under
+`service bws account access-token`, or from an operator-declared environment
+credential.
 
 The wrapper discards command stdout and stderr, including failures. It returns
 only a fixed completion status. The default timeout is 300 seconds; set
@@ -54,10 +55,12 @@ scripts/with-bws-token.sh secret-names REGION
 names. `secret-names us` or `secret-names eu` returns secret key names and
 project names through the SDK identifier-only endpoint, without values.
 
-Keyring-capable hosts reject an inherited non-empty `BWS_ACCESS_TOKEN`. Containers
-without executable keyring support can explicitly opt into an existing token with
-`BWS_ACCESS_TOKEN_SOURCE=environment`. The token is still excluded from the
-application environment. If the keyring is locked, ask the user to unlock it in their own session, never to paste credentials.
+The keyring is the default credential source. An operator selects an inherited
+token instead by declaring `BWS_ACCESS_TOKEN_SOURCE=environment`; the declaration
+is authoritative on any host. Without that exact declaration an inherited
+non-empty `BWS_ACCESS_TOKEN` is refused. The token is still excluded from the
+application environment. If no credential source resolves, ask the user to repair
+it in their own session, never to paste credentials.
 See [operator setup](references/cli-guide.md).
 
 Existing `provision-generated RECIPE`, `run-approved RECIPE`, and

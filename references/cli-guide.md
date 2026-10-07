@@ -17,9 +17,9 @@ perform this under the credential service's identity, not the agent's identity.
 The keyring must be available and unlocked in that identity's session.
 
 An ordinary desktop keyring does not guarantee unattended access after reboot.
-For services, use an operator-managed unlock mechanism or a separately reviewed
-service credential store. Do not solve startup by exporting the token globally.
-The Linux keyring remains the default and required desktop credential source.
+For unattended hosts, either use an operator-managed unlock mechanism for the
+keyring, or declare the environment source below. The Linux keyring remains the
+default credential source and is preferred when a human can unlock it.
 
 Use these commands to verify access without retrieving secret values:
 
@@ -37,28 +37,46 @@ server or profile overrides from its caller. Existing configuration under the
 operating user's home still applies; that home must be inaccessible to agents in
 an enforced deployment.
 
-## Explicit container environment source
+## Explicit environment source
 
-A container that has no executable `/usr/bin/secret-tool` may use a token already
-in its protected environment only when the host explicitly declares that source:
+An operator declares an inherited token as the credential source:
 
 ```text
 BWS_ACCESS_TOKEN_SOURCE=environment
 BWS_ACCESS_TOKEN=<operator-supplied machine-account token>
 ```
 
-Configure both values through the container platform. Do not type or print the
-token in an agent command, chat, log, shell profile, or committed file. The
-wrapper reads the inherited value without copying it into parent `os.environ`.
+The declaration is authoritative: it selects the inherited token even on a host
+where `/usr/bin/secret-tool` is executable. Use it for containers without
+keyring support and for hosts that must work unattended after a reboot, where an
+interactive keyring password is unavailable.
+
+Load both values from an operator-owned store with owner-only permissions, for
+example a `0600` file under `~/.config/` sourced by the session manager, or a
+systemd user unit using `LoadCredential=`. Do not type or print the token in an
+agent command, chat, log, shell profile, or committed file. Keep the store out of
+version control and out of any directory the task writes to.
+
+The wrapper reads the inherited value without copying it into parent `os.environ`.
 The fixed `bws` child receives a minimal environment containing the token; fixed
 SDK workers receive it through a private pipe or stdin. Unrelated inherited
 variables are excluded, and no token is returned.
 
-This mode is deliberately fail closed. Without the exact source declaration, an
-inherited token is refused. If `/usr/bin/secret-tool` is executable, the inherited
-token is refused even with the declaration. A host with an installed but locked,
-misconfigured, or unreachable keyring must repair the keyring rather than silently
-fall back to the environment source.
+This mode is still fail closed. Without the exact source declaration, an inherited
+token is refused on every host, so an accidental or agent-supplied
+`BWS_ACCESS_TOKEN` never becomes the credential by itself.
+
+Understand the residual exposure before choosing this mode. The token is then
+present in the agent's own process environment and in `/proc/<pid>/environ` for
+that user, so a plain `env` or `printenv` in a tool call writes it into the
+transcript. The wrapper excludes `BWS_*` from the application environment and
+sets `RLIMIT_CORE` to zero, but it cannot stop the agent from reading its own
+environment. Prefer a narrowly scoped machine account, a token expiry, and a
+command guardrail that blocks environment dumps.
+
+Without a declaration, a host with an installed but locked, misconfigured, or
+unreachable keyring must repair the keyring rather than silently fall back to the
+environment source.
 
 Use `secret-names us` for Bitwarden cloud US or `secret-names eu` for Bitwarden
 cloud EU. It uses `bws project list` only for project identifiers and the pinned
@@ -119,9 +137,10 @@ scripts alone cannot prove isolation of the host.
   operation instead; it accepts arbitrary commands and suppresses their output.
 - `sync-secret-to-vercel.py` is disabled until an operation binds an approved
   secret to an approved destination outside agent control.
-- Inherited `BWS_ACCESS_TOKEN` is rejected. Existing shell/CI integrations must
-  move authentication into the credential handler. The only exception is the
-  explicit container mode above on a host without executable keyring support.
+- An inherited `BWS_ACCESS_TOKEN` is refused unless the operator declares
+  `BWS_ACCESS_TOKEN_SOURCE=environment`. Shell, container, and CI integrations set
+  both values in the operator-owned environment; they must not rely on an
+  undeclared token.
 
 ## Official references
 

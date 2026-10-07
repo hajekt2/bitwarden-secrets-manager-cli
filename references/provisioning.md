@@ -53,7 +53,7 @@ approving the actual recipe. Do not place credentials in arguments or recipes.
 ## Data boundary
 
 The worker obtains the access token from the Linux keyring by default. In the
-explicit container environment mode documented in [operator setup](cli-guide.md#explicit-container-environment-source),
+explicit environment source mode documented in [operator setup](cli-guide.md#explicit-environment-source),
 the parent passes the already-inherited token to the fixed worker through a
 private inherited file descriptor. It never places the token in the worker
 environment or arguments. The worker generates values in memory and calls the

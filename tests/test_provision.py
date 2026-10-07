@@ -122,9 +122,9 @@ class ProvisionTests(unittest.TestCase):
                 self.assertEqual(ops.main(args), 2)
             worker.assert_not_called()
 
-    def test_inherited_token_rejected_on_keyring_host(self):
-        variables = {'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET', 'BWS_ACCESS_TOKEN_SOURCE': 'environment'}
-        with patch.dict(os.environ, variables), patch.object(ops, 'keyring_available', return_value=True), patch.object(ops.subprocess, 'Popen') as child:
+    def test_undeclared_inherited_token_rejected_on_keyring_host(self):
+        variables = {'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET'}
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=True), patch.object(ops.subprocess, 'Popen') as child:
             with self.assertRaises(ops.OperationError): ops.provision_generated('example')
             child.assert_not_called()
 
@@ -157,6 +157,27 @@ class ProvisionTests(unittest.TestCase):
             result = ops.provision_generated('example')
             self.assertEqual(os.read(captured_token_fds[0], 8192), b'SYNTHETIC_SECRET')
             os.close(captured_token_fds[0])
+        self.assertEqual(json.loads(result), {'status':'created','secret_id':SECRET})
+
+    def test_declared_environment_source_wins_over_keyring_for_worker(self):
+        captured_token_fds = []
+        keyring = Mock(side_effect=AssertionError('keyring must not be consulted'))
+
+        def child(argv, **kwargs):
+            token_fd = int(kwargs['env']['BWS_ACCESS_TOKEN_FD'])
+            captured_token_fds.append(os.dup(token_fd))
+            os.write(kwargs['pass_fds'][0], json.dumps({'status':'created','secret_id':SECRET}).encode())
+            return Obj(returncode=0, pid=12345, wait=Mock())
+        variables = {
+            'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET',
+            'BWS_ACCESS_TOKEN_SOURCE': 'environment',
+        }
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=True), patch.object(
+                ops, 'keyring_token', keyring), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
+            result = ops.provision_generated('example')
+            self.assertEqual(os.read(captured_token_fds[0], 8192), b'SYNTHETIC_SECRET')
+            os.close(captured_token_fds[0])
+        keyring.assert_not_called()
         self.assertEqual(json.loads(result), {'status':'created','secret_id':SECRET})
 
     def test_parent_suppresses_streams_and_filters_receipt(self):

@@ -49,14 +49,34 @@ class OperationsTests(unittest.TestCase):
                     self.assertEqual(self.invoke(args)[0], 2)
             execute.assert_not_called()
 
-    def test_keyring_capable_host_rejects_opted_in_environment_token(self):
+    def test_declared_environment_source_wins_on_keyring_capable_host(self):
         variables = {'BWS_ACCESS_TOKEN': TOKEN, 'BWS_ACCESS_TOKEN_SOURCE': 'environment'}
-        with patch.dict(os.environ, variables), patch.object(ops, 'keyring_available', return_value=True), patch.object(ops, 'keyring_token') as lookup:
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=True), patch.object(ops, 'keyring_token') as keyring, patch.object(
+                ops, 'bws_executable', return_value='/trusted/bws'), patch.object(ops, 'run_captured', return_value=b'[]') as run:
+            code, out, err = self.invoke(['check-auth'])
+        self.assertEqual(code, 0)
+        keyring.assert_not_called()
+        self.assertNotIn(TOKEN, out + err)
+        self.assertEqual(run.call_args.args[1]['BWS_ACCESS_TOKEN'], TOKEN)
+
+    def test_keyring_capable_host_rejects_undeclared_environment_token(self):
+        variables = {'BWS_ACCESS_TOKEN': TOKEN}
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=True), patch.object(ops, 'keyring_token') as lookup, patch.object(ops, 'run_captured') as run:
             code, out, err = self.invoke(['check-auth'])
         self.assertEqual(code, 1)
         self.assertNotIn(TOKEN, out + err)
-        self.assertIn('keyring support', err)
+        self.assertIn('denied', err)
         lookup.assert_not_called()
+        run.assert_not_called()
+
+    def test_declared_source_without_token_falls_back_to_keyring(self):
+        variables = {'BWS_ACCESS_TOKEN_SOURCE': 'environment'}
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=True), patch.object(ops, 'keyring_token', return_value=TOKEN), patch.object(
+                ops, 'bws_executable', return_value='/trusted/bws'), patch.object(ops, 'run_captured', return_value=b'[]') as run:
+            code, out, err = self.invoke(['check-auth'])
+        self.assertEqual(code, 0)
+        self.assertNotIn(TOKEN, out + err)
+        self.assertEqual(run.call_args.args[1]['BWS_ACCESS_TOKEN'], TOKEN)
 
     def test_keyring_unavailable_host_requires_explicit_opt_in(self):
         with patch.dict(os.environ, {'BWS_ACCESS_TOKEN': TOKEN}), patch.object(ops, 'keyring_available', return_value=False), patch.object(ops, 'keyring_token') as lookup:
