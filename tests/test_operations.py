@@ -224,13 +224,21 @@ class OperationsTests(unittest.TestCase):
         safe = json.dumps({'count': 1, 'secrets': [{'project': 'example', 'key': 'database-url'}]}).encode()
         success = subprocess.CompletedProcess([], 0, stdout=safe, stderr=TOKEN.encode())
         failure = subprocess.CompletedProcess([], 1, stdout=TOKEN.encode(), stderr=TOKEN.encode())
-        with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops.subprocess, 'run', return_value=success):
+        with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'run', return_value=success):
             result = ops.sdk_secret_names('us', TOKEN, [{**PROJECT, 'organization_id': ORG}], {'HOME': '/fixed'})
         self.assertEqual(json.loads(result), {'count': 1, 'secrets': [{'project': 'example', 'key': 'database-url'}]})
         self.assertNotIn(TOKEN, result)
-        with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops.subprocess, 'run', return_value=failure):
+        with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'run', return_value=failure):
             with self.assertRaises(ops.OperationError) as error:
                 ops.sdk_secret_names('us', TOKEN, [{**PROJECT, 'organization_id': ORG}], {'HOME': '/fixed'})
+        self.assertNotIn(TOKEN, str(error.exception))
+
+    def test_unusable_sdk_worker_reports_repair_and_never_leaks_token(self):
+        broken = subprocess.CompletedProcess([], 1, stdout=TOKEN.encode(), stderr=TOKEN.encode())
+        with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops.subprocess, 'run', return_value=broken):
+            with self.assertRaises(ops.OperationError) as error:
+                ops.sdk_secret_names('us', TOKEN, [{**PROJECT, 'organization_id': ORG}], {'HOME': '/fixed'})
+        self.assertIn('--copies', str(error.exception))
         self.assertNotIn(TOKEN, str(error.exception))
 
     def test_secret_names_report_shape_fails_closed(self):
@@ -246,11 +254,11 @@ class OperationsTests(unittest.TestCase):
         ]
         for stdout in rejected:
             result = subprocess.CompletedProcess([], 0, stdout=stdout, stderr=b'')
-            with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops.subprocess, 'run', return_value=result):
+            with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'run', return_value=result):
                 with self.assertRaises(ops.OperationError):
                     ops.sdk_secret_names('us', TOKEN, projects, {'HOME': '/fixed'})
         result = subprocess.CompletedProcess([], 0, stdout=json.dumps({'count': 1, 'secrets': [{'project': 'unattributed:' + ORG, 'key': 'orphan-key'}]}).encode(), stderr=b'')
-        with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops.subprocess, 'run', return_value=result):
+        with patch.object(ops.Path, 'is_file', return_value=True), patch.object(ops.os, 'access', return_value=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'run', return_value=result):
             self.assertEqual(
                 json.loads(ops.sdk_secret_names('us', TOKEN, projects, {'HOME': '/fixed'})),
                 {'count': 1, 'secrets': [{'project': 'unattributed:' + ORG, 'key': 'orphan-key'}]},

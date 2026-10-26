@@ -15,9 +15,23 @@ reconciliation and transfer of its non-secret receipt.
 Install the official SDK in the fixed interpreter location:
 
 ```bash
-python3 -m venv "$HOME/.local/share/bws-operations/venv"
+python3 -m venv --copies "$HOME/.local/share/bws-operations/venv"
 "$HOME/.local/share/bws-operations/venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple --only-binary=:all: --require-hashes -r requirements-provision.txt
+"$HOME/.local/share/bws-operations/venv/bin/python" -I -c 'import bitwarden_sdk'
 ```
+
+Create the environment with `--copies`. A plain `python3 -m venv` links
+`venv/bin/python3` to the system `python3`, and when the operating system moves
+that name to a newer Python series, the interpreter no longer matches the
+`lib/python3.12/site-packages` directory holding the pinned SDK and every import
+fails. `--copies` keeps a copy of the interpreter that installed the packages, so
+the environment stays self-describing. The final line must print nothing: it
+proves the worker can import the pinned SDK, and the wrapper runs the same probe
+before it hands a credential to the interpreter.
+
+If the copy's own interpreter is later removed by an operating system upgrade,
+the wrapper reports an unusable worker. Then delete
+`~/.local/share/bws-operations/venv` and repeat Setup on that host.
 
 The pinned dependency versions and reviewed Linux x86_64 wheel hashes are in
 `requirements-provision.txt`. The installer ignores caller pip configuration.

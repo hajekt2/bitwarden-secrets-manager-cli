@@ -228,10 +228,32 @@ def secret_names_worker(region):
         return 1
 
 
-def sdk_secret_names(region, token, projects, env):
+def sdk_worker(env):
     executable = Path(env["HOME"]) / ".local/share/bws-operations/venv/bin/python"
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise OperationError("Bitwarden SDK worker is not installed at the supported location.")
+    if not sdk_worker_ready(executable):
+        raise OperationError(
+            "Bitwarden SDK worker is unusable: its interpreter no longer imports the "
+            "pinned SDK. Rebuild the virtual environment with --copies as shown in "
+            "references/provisioning.md."
+        )
+    return executable
+
+
+def sdk_worker_ready(executable):
+    try:
+        probe = subprocess.run(
+            [str(executable), "-I", "-c", "import bitwarden_sdk"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
+def sdk_secret_names(region, token, projects, env):
+    executable = sdk_worker(env)
     payload = json.dumps({"token": token, "projects": projects}).encode()
     try:
         result = subprocess.run(
@@ -476,7 +498,7 @@ def provision_generated(name, approved=False, inspect=False):
     for key in ("DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "DISPLAY", "XAUTHORITY"):
         if key in os.environ:
             env[key] = os.environ[key]
-    executable = Path(env["HOME"]) / ".local/share/bws-operations/venv/bin/python"
+    executable = sdk_worker(env)
     result_fd = os.memfd_create("bws-operation-result", os.MFD_CLOEXEC)
     token_read_fd = token_write_fd = -1
     cleanup_read_fd = cleanup_write_fd = -1

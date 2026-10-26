@@ -7,6 +7,11 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   repository owns the credential wrapper and its public result validation.
 - Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` and
   the shell syntax command in `README.md` after wrapper changes.
+- The SDK virtual environment at `~/.local/share/bws-operations/venv` must be
+  built with `--copies`: a symlinked interpreter stops matching its own
+  `site-packages` when the operating system moves `python3` to a newer series.
+  Setup and repair steps live in `references/provisioning.md`; `sdk_worker`
+  probes the SDK import before any credential reaches the interpreter.
 
 ## Maintaining this file
 

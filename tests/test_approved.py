@@ -494,7 +494,7 @@ print(json.dumps({'exports': {'signing': data['bootstrap']}}))
             os.write(kwargs['pass_fds'][1], b'{"result_path":null}')
             return Obj(returncode=0, pid=12345, wait=Mock())
         stdout, stderr = io.StringIO(), io.StringIO()
-        with patch.dict(os.environ, {}, clear=True), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with patch.dict(os.environ, {}, clear=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             self.assertEqual(ops.main(['run-approved', 'example']), 1)
         self.assertNotIn(VALUE, stdout.getvalue() + stderr.getvalue())
 
@@ -513,8 +513,7 @@ print(json.dumps({'exports': {'signing': data['bootstrap']}}))
                 }).encode())
                 return Obj(returncode=0, pid=12345, wait=Mock())
 
-            with patch.dict(os.environ, {}, clear=True), patch.object(
-                    ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
+            with patch.dict(os.environ, {}, clear=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object( ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
                 result = json.loads(ops.provision_generated('opentofu-state-inventory', approved=True))
             self.assertEqual(result['result']['count'], 1000)
             self.assertEqual(result['result']['resource_addresses'], addresses)
@@ -547,8 +546,7 @@ print(json.dumps({'exports': {'signing': data['bootstrap']}}))
                 'BWS_ACCESS_TOKEN_SOURCE': 'environment',
             }
             with patch.dict(os.environ, variables, clear=True), patch.object(
-                    ops, 'keyring_available', return_value=False), patch.object(
-                    ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
+                    ops, 'keyring_available', return_value=False), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object( ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
                 result = json.loads(ops.provision_generated('opentofu-state-inventory', approved=True))
             self.assertEqual(result['result'], {'resource_addresses': [], 'count': 0})
             self.assertEqual(os.read(captured_token_fds[0], 8192), VALUE.encode())
@@ -567,8 +565,7 @@ print(json.dumps({'exports': {'signing': data['bootstrap']}}))
             'BWS_ACCESS_TOKEN_SOURCE': 'environment',
         }
         with patch.dict(os.environ, variables, clear=True), patch.object(
-                ops, 'keyring_available', return_value=False), patch.object(
-                ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
+                ops, 'keyring_available', return_value=False), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object( ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
             with self.assertRaises(ops.OperationError):
                 ops.provision_generated('opentofu-state-inventory', approved=True)
         self.assertEqual(os.read(captured_token_fds[0], 8192), b'')
@@ -594,8 +591,7 @@ print(json.dumps({'exports': {'signing': data['bootstrap']}}))
                     ops.subprocess.TimeoutExpired('worker', 360), 0,
                 ]))
 
-            with patch.dict(os.environ, {}, clear=True), patch.object(
-                    ops.subprocess, 'Popen', side_effect=launch_worker) as launch, patch.object(
+            with patch.dict(os.environ, {}, clear=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object( ops.subprocess, 'Popen', side_effect=launch_worker) as launch, patch.object(
                     ops.os, 'killpg') as kill:
                 with self.assertRaises(ops.subprocess.TimeoutExpired):
                     ops.provision_generated('example', approved=True)
@@ -617,8 +613,7 @@ print(json.dumps({'exports': {'signing': data['bootstrap']}}))
                     ops.subprocess.TimeoutExpired('worker', 360), 0,
                 ]))
 
-            with patch.dict(os.environ, {}, clear=True), patch.object(
-                    ops.subprocess, 'Popen', side_effect=launch_worker), patch.object(
+            with patch.dict(os.environ, {}, clear=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object( ops.subprocess, 'Popen', side_effect=launch_worker), patch.object(
                     ops.os, 'killpg'):
                 with self.assertRaises(ops.subprocess.TimeoutExpired):
                     ops.provision_generated('example', approved=True)
