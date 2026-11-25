@@ -193,14 +193,59 @@ def identifier_secret_names(client, projects):
     return identifiers_seen, sorted(selected, key=lambda item: (item["project"], item.get("project_id", ""), item["key"]))
 
 
+def secret_selector(selector):
+    parts = selector.split("/")
+    if (len(parts) not in (1, 2) or any(not part or len(part) > 256 or
+            any(ord(char) < 32 or ord(char) == 127 for char in part) for part in parts)):
+        raise ValueError
+    return (None, parts[0]) if len(parts) == 1 else tuple(parts)
+
+
+def resolve_secret_identifiers(client, projects, selectors):
+    queries = [secret_selector(selector) for selector in selectors]
+    organizations = {project["organization_id"] for project in projects}
+    by_project_name = {}
+    for project in projects:
+        by_project_name.setdefault(project["name"], set()).add(
+            (project["organization_id"], project["id"])
+        )
+    if any(project and len(by_project_name.get(project, ())) > 1 for project, _ in queries):
+        return {"error": "ambiguous-project"}
+    matches = [set() for _ in queries]
+    for organization in sorted(organizations):
+        for entry in client.secrets().list(organization).data.data:
+            if str(uuid.UUID(str(entry.organization_id))) != organization:
+                raise ValueError
+            project_ids = {str(uuid.UUID(str(value))) for value in entry.project_ids}
+            for i, (project, key) in enumerate(queries):
+                if entry.key == key and (project is None or any(
+                    (organization, project_id) in by_project_name.get(project, ())
+                    for project_id in project_ids
+                )):
+                    matches[i].add(str(uuid.UUID(str(entry.id))))
+    if any(len(match) > 1 for match in matches):
+        return {"error": "ambiguous-secret"}
+    if any(not match for match in matches):
+        return {"error": "missing"}
+    return {"ids": [next(iter(match)) for match in matches]}
+
+
 def secret_names_worker(region):
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         if ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) != 0:  # PR_SET_DUMPABLE
             return 1
         payload = json.loads(sys.stdin.buffer.read(1048577))
-        if set(payload) != {"token", "projects"} or len(json.dumps(payload).encode()) > 1048576:
+        if set(payload) not in ({"token", "projects"}, {"token", "projects", "selectors"}):
             raise ValueError
+        if len(json.dumps(payload).encode()) > 1048576:
+            raise ValueError
+        selectors = payload.get("selectors")
+        if "selectors" in payload:
+            if not isinstance(selectors, list) or not 1 <= len(selectors) <= 64:
+                raise ValueError
+            for selector in selectors:
+                secret_selector(selector)
         token = usable_token(payload["token"], "environment")
         projects = payload["projects"]
         if not isinstance(projects, list) or len(projects) > 10000:
@@ -221,8 +266,12 @@ def secret_names_worker(region):
             "userAgent": "secret-name-enumeration",
         }))
         client.auth().login_access_token(token)
-        count, selected = identifier_secret_names(client, projects)
-        print(json.dumps({"count": count, "secrets": selected}, ensure_ascii=True))
+        if selectors is None:
+            count, selected = identifier_secret_names(client, projects)
+            report = {"count": count, "secrets": selected}
+        else:
+            report = resolve_secret_identifiers(client, projects, selectors)
+        print(json.dumps(report, ensure_ascii=True))
         return 0
     except BaseException:
         return 1
@@ -252,9 +301,10 @@ def sdk_worker_ready(executable):
     return probe.returncode == 0
 
 
-def sdk_secret_names(region, token, projects, env):
+def sdk_identifier_query(region, payload, env):
     executable = sdk_worker(env)
-    payload = json.dumps({"token": token, "projects": projects}).encode()
+    resolving = "selectors" in payload
+    payload = json.dumps(payload).encode()
     try:
         result = subprocess.run(
             [str(executable), "-I", str(Path(__file__)), "--secret-names-worker", region],
@@ -270,7 +320,16 @@ def sdk_secret_names(region, token, projects, env):
             "Credential was found, but the vault request failed or rejected it; child output suppressed."
         )
     try:
-        report = json.loads(result.stdout)
+        if resolving and len(result.stdout) > MAXIMUM_WORKER_RESULT_BYTES:
+            raise ValueError
+        return json.loads(result.stdout)
+    except (ValueError, UnicodeError):
+        raise OperationError("Invalid secret identifier response; child output suppressed.") from None
+
+
+def sdk_secret_names(region, token, projects, env):
+    report = sdk_identifier_query(region, {"token": token, "projects": projects}, env)
+    try:
         if not isinstance(report, dict) or set(report) != {"count", "secrets"}:
             raise ValueError
         count = report["count"]
@@ -373,31 +432,71 @@ def discard_private_result(path):
         raise OperationError() from None
 
 
+class SecretResolutionError(OperationError):
+    """A fixed lookup failure before any secret or application is accessed."""
+
+
+def resolve_named_bindings(region, selectors, executable, token, env):
+    projects = selected_projects(run_captured(
+        [executable, "project", "list", "--output", "json"],
+        {**env, "BWS_ACCESS_TOKEN": token},
+    ), include_organization=True)
+    report = sdk_identifier_query(region, {
+        "token": token, "projects": projects, "selectors": selectors,
+    }, env)
+    errors = {
+        "missing": "No accessible secret matches a requested name. Check its exact name and project.",
+        "ambiguous-secret": "Secret name is ambiguous. Use PROJECT/NAME or an exact UUID.",
+        "ambiguous-project": "Project name is ambiguous. Use an exact secret UUID.",
+    }
+    try:
+        if isinstance(report, dict) and set(report) == {"error"}:
+            raise SecretResolutionError(errors[report["error"]])
+        if (not isinstance(report, dict) or set(report) != {"ids"}
+                or not isinstance(report["ids"], list) or len(report["ids"]) != len(selectors)):
+            raise ValueError
+        return [str(uuid.UUID(identifier)) for identifier in report["ids"]]
+    except (KeyError, ValueError, TypeError, AttributeError):
+        raise OperationError("Invalid secret resolution response; child output suppressed.") from None
+
+
 def run_script(args):
     """Inject selected application secrets into any requested command."""
     parser = argparse.ArgumentParser(prog="with-bws-token.sh run")
     parser.add_argument("--secret", action="append", default=[], metavar="ENV=UUID")
+    parser.add_argument("--secret-name", action="append", default=[], metavar="ENV=[PROJECT/]NAME")
+    parser.add_argument("--region", choices=("us", "eu"), default="us", help="region for name lookup (default: us)")
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     options = parser.parse_args(args)
     command = options.command
     if command and command[0] == "--":
         command = command[1:]
-    if not command or not options.secret or options.timeout <= 0:
-        raise OperationError("Specify --secret ENV=UUID, a positive timeout, and -- COMMAND.")
-    bindings = {}
-    for binding in options.secret:
-        name, separator, identifier = binding.partition("=")
-        if (not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
-                or name.startswith("BWS_") or name in bindings):
-            raise OperationError("Invalid or duplicate secret environment binding.")
-        try:
-            bindings[name] = str(uuid.UUID(identifier))
-        except ValueError:
-            raise OperationError("Secret bindings require UUIDs.") from None
+    if not command or not (options.secret or options.secret_name) or options.timeout <= 0:
+        raise OperationError("Specify a secret binding, a positive timeout, and -- COMMAND.")
+    if len(options.secret_name) > 64:
+        raise OperationError("Too many secret name bindings.")
+    bindings, named = {}, {}
+    for by_name, specs in ((False, options.secret), (True, options.secret_name)):
+        for binding in specs:
+            name, separator, identifier = binding.partition("=")
+            if (not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                    or name.startswith("BWS_") or name in bindings or name in named):
+                raise OperationError("Invalid or duplicate secret environment binding.")
+            try:
+                if by_name:
+                    secret_selector(identifier)
+                    named[name] = identifier
+                else:
+                    bindings[name] = str(uuid.UUID(identifier))
+            except ValueError:
+                raise OperationError("Use --secret ENV=UUID or --secret-name ENV=[PROJECT/]NAME.") from None
     env = command_environment()
     executable = bws_executable(env)
     token = credential_token(env)
+    if named:
+        identifiers = resolve_named_bindings(options.region, list(named.values()), executable, token, env)
+        bindings.update(zip(named, identifiers, strict=True))
     child_env = {key: value for key, value in os.environ.items() if not key.startswith("BWS_")}
     for name, identifier in bindings.items():
         try:
@@ -435,6 +534,9 @@ def main(args):
             return 0
         except SystemExit as error:
             return error.code
+        except SecretResolutionError as error:
+            print(str(error), file=sys.stderr)
+            return 1
         except Exception:
             print("Script operation failed; output suppressed. Check the task result before retrying writes.", file=sys.stderr)
             return 1

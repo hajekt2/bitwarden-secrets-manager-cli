@@ -162,6 +162,32 @@ class OperationsTests(unittest.TestCase):
         self.assertIn('vault request failed or rejected it', err)
         self.assertNotIn(TOKEN, out + err)
 
+    def test_exact_secret_resolution_and_project_scope(self):
+        project = {**PROJECT, 'organization_id': ORG}
+        second_project = {**project, 'id': '55555555-5555-4555-8555-555555555555', 'name': 'other'}
+        first_id = '22222222-2222-4222-8222-222222222222'
+        second_id = '33333333-3333-4333-8333-333333333333'
+        entry = Obj(id=first_id, key='database-url', organization_id=ORG,
+                    project_ids=[project['id']])
+        other = Obj(id=second_id, key='database-url', organization_id=ORG,
+                    project_ids=[second_project['id']])
+        client = Mock()
+        client.secrets().list.return_value = Obj(data=Obj(data=[entry, other]))
+        projects = [project, second_project]
+        for selectors, expected in [
+            (['other/database-url', 'example/database-url'], {'ids': [second_id, first_id]}),
+            (['database-url'], {'error': 'ambiguous-secret'}),
+            (['example/DATABASE-URL'], {'error': 'missing'}),
+            (['unknown/database-url'], {'error': 'missing'}),
+        ]:
+            with self.subTest(selectors=selectors):
+                self.assertEqual(ops.resolve_secret_identifiers(client, projects, selectors), expected)
+        client.secrets().list.return_value = Obj(data=Obj(data=[entry, entry]))
+        self.assertEqual(ops.resolve_secret_identifiers(client, projects, ['database-url']), {'ids': [first_id]})
+        self.assertEqual(ops.resolve_secret_identifiers(client, [project, {**second_project, 'name': 'example'}],
+                                                        ['example/database-url']), {'error': 'ambiguous-project'})
+        client.secrets().get.assert_not_called()
+
     def test_secret_name_enumeration_uses_identifier_listing_only(self):
         client = Mock()
         client.secrets().list.return_value = Obj(data=Obj(data=[

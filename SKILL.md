@@ -16,12 +16,15 @@ writes and destructive actions.
 Use the bundled Linux wrapper:
 
 ```bash
-scripts/with-bws-token.sh run --secret API_TOKEN=11111111-2222-3333-4444-555555555555 -- python3 /absolute/path/task.py
+scripts/with-bws-token.sh run --secret-name API_TOKEN=project/secret-name -- python3 /absolute/path/task.py
 ```
 
-Replace the example UUID with the required secret ID. Repeat `--secret ENV=UUID`
-for each required credential. The wrapper fetches only those secrets and puts
-their values in the command's environment. It accepts any executable and arguments,
+Use `--secret-name ENV=NAME` when the exact name identifies one accessible entry.
+Qualify duplicate names as `PROJECT/NAME`. If that is still ambiguous, or the
+name contains `/`, use `--secret ENV=UUID`. Name lookup uses the SDK's identifier
+endpoint. It defaults to US; pass `--region eu` when `bws` is configured for EU.
+Repeat either flag for each required credential. The wrapper fetches only those
+secrets and puts their values in the command's environment. It accepts any executable and arguments,
 including an interpreter and an agent-created script. Run from the task's working
 directory, using the wrapper's absolute path when needed.
 

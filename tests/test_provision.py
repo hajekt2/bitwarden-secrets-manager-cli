@@ -124,14 +124,14 @@ class ProvisionTests(unittest.TestCase):
 
     def test_undeclared_inherited_token_rejected_on_keyring_host(self):
         variables = {'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET'}
-        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'Popen') as child:
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=True), patch.object(ops, 'sdk_worker', return_value=Path('/mock/sdk-python')), patch.object(ops.subprocess, 'Popen') as child:
             with self.assertRaises(ops.OperationError): ops.provision_generated('example')
             child.assert_not_called()
 
     def test_missing_container_source_reports_source_failure(self):
         variables = {'BWS_ACCESS_TOKEN': 'SYNTHETIC_SECRET'}
         stdout, stderr = io.StringIO(), io.StringIO()
-        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=False), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'Popen') as child, contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=False), patch.object(ops, 'sdk_worker', return_value=Path('/mock/sdk-python')), patch.object(ops.subprocess, 'Popen') as child, contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             self.assertEqual(ops.main(['run-approved', 'example']), 1)
         child.assert_not_called()
         self.assertIn('No credential source is available', stderr.getvalue())
@@ -153,7 +153,7 @@ class ProvisionTests(unittest.TestCase):
             'BWS_ACCESS_TOKEN_SOURCE': 'environment',
             'OTHER_SECRET': 'unrelated',
         }
-        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=False), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'Popen', side_effect=child) as launch, patch.object(ops.os, 'killpg'):
+        with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=False), patch.object(ops, 'sdk_worker', return_value=Path('/mock/sdk-python')), patch.object(ops.subprocess, 'Popen', side_effect=child) as launch, patch.object(ops.os, 'killpg'):
             result = ops.provision_generated('example')
             self.assertEqual(os.read(captured_token_fds[0], 8192), b'SYNTHETIC_SECRET')
             os.close(captured_token_fds[0])
@@ -173,7 +173,7 @@ class ProvisionTests(unittest.TestCase):
             'BWS_ACCESS_TOKEN_SOURCE': 'environment',
         }
         with patch.dict(os.environ, variables, clear=True), patch.object(ops, 'keyring_available', return_value=True), patch.object(
-                ops, 'keyring_token', keyring), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
+                ops, 'keyring_token', keyring), patch.object(ops, 'sdk_worker', return_value=Path('/mock/sdk-python')), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
             result = ops.provision_generated('example')
             self.assertEqual(os.read(captured_token_fds[0], 8192), b'SYNTHETIC_SECRET')
             os.close(captured_token_fds[0])
@@ -191,7 +191,7 @@ class ProvisionTests(unittest.TestCase):
             self.assertEqual(argv[1], '-I')
             os.write(kwargs['pass_fds'][0], json.dumps({'status':'created','secret_id':SECRET}).encode())
             return Obj(returncode=0, pid=12345, wait=Mock())
-        with patch.dict(os.environ, {'OTHER_SECRET':'SYNTHETIC_SECRET','HTTPS_PROXY':'https://evil.invalid'}, clear=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
+        with patch.dict(os.environ, {'OTHER_SECRET':'SYNTHETIC_SECRET','HTTPS_PROXY':'https://evil.invalid'}, clear=True), patch.object(ops, 'sdk_worker', return_value=Path('/mock/sdk-python')), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'):
             self.assertEqual(json.loads(ops.provision_generated('example')), {'status':'created','secret_id':SECRET})
 
     def test_malformed_worker_receipt_is_not_echoed(self):
@@ -199,7 +199,7 @@ class ProvisionTests(unittest.TestCase):
             os.write(kwargs['pass_fds'][0], b'{"status":"created","secret_id":"SYNTHETIC_SECRET"}')
             return Obj(returncode=0, pid=12345, wait=Mock())
         stdout, stderr = io.StringIO(), io.StringIO()
-        with patch.dict(os.environ, {}, clear=True), patch.object(ops, 'sdk_worker_ready', return_value=True), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with patch.dict(os.environ, {}, clear=True), patch.object(ops, 'sdk_worker', return_value=Path('/mock/sdk-python')), patch.object(ops.subprocess, 'Popen', side_effect=child), patch.object(ops.os, 'killpg'), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             self.assertEqual(ops.main(['provision-generated','example']),1)
         self.assertNotIn('SYNTHETIC_SECRET', stdout.getvalue()+stderr.getvalue())
 
