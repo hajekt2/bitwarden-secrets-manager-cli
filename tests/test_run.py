@@ -42,6 +42,61 @@ class RunTests(unittest.TestCase):
                     ops.run_script(args)
             token.assert_not_called()
 
+    def test_name_and_uuid_bindings_fetch_only_selected_secrets(self):
+        other = '22222222-2222-4222-8222-222222222222'
+        project = {'id': ID, 'name': 'app', 'organizationId': other}
+        out, err = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, {'BWS_ACCESS_TOKEN': 'unrelated'}, clear=True), patch.object(
+            ops, 'bws_executable', return_value='/trusted/bws'
+        ), patch.object(ops, 'credential_token', return_value='synthetic-machine-token'), patch.object(
+            ops, 'run_captured', side_effect=[json.dumps([project]), json.dumps({'id': other, 'value': 'other'}),
+                                             json.dumps({'id': ID, 'value': VALUE})]
+        ) as fetch, patch.object(ops, 'sdk_identifier_query', return_value={'ids': [ID]}) as resolve, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ops.main(['run', '--secret-name', 'API_TOKEN=app/registry-read', '--secret', 'OTHER=' + other,
+                             '--region', 'eu', '--', sys.executable, '-c',
+                             "import os; assert os.environ['OTHER'] == 'other'; "
+                             "assert not any(k.startswith('BWS_') for k in os.environ); "
+                             "assert os.environ['API_TOKEN'] == 'synthetic-application-secret'; "
+                             "print(os.environ['API_TOKEN'])"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue()), {'status': 'completed'})
+        self.assertNotIn(VALUE, out.getvalue() + err.getvalue())
+        self.assertEqual(resolve.call_args.args[0], 'eu')
+        self.assertEqual(resolve.call_args.args[1]['selectors'], ['app/registry-read'])
+        self.assertEqual([c.args[0] for c in fetch.call_args_list], [
+            ['/trusted/bws', 'project', 'list', '--output', 'json'],
+            ['/trusted/bws', 'secret', 'get', other, '--output', 'json'],
+            ['/trusted/bws', 'secret', 'get', ID, '--output', 'json'],
+        ])
+
+    def test_name_lookup_failure_never_fetches_any_value_or_starts_command(self):
+        for response, message in [({'error': 'missing'}, 'No accessible secret'),
+                                  ({'error': 'ambiguous-secret'}, 'Use PROJECT/NAME'),
+                                  ({'error': 'ambiguous-project'}, 'Use an exact secret UUID'),
+                                  ({'ids': ['synthetic-machine-token']}, 'output suppressed'),
+                                  ({'ids': []}, 'output suppressed')]:
+            with self.subTest(response=response):
+                out, err = io.StringIO(), io.StringIO()
+                with patch.object(ops, 'bws_executable', return_value='/trusted/bws'), patch.object(
+                    ops, 'credential_token', return_value='synthetic-machine-token'
+                ), patch.object(ops, 'run_captured', return_value=b'[]') as fetch, patch.object(
+                    ops, 'sdk_identifier_query', return_value=response
+                ), patch.object(ops.subprocess, 'Popen') as launch, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = ops.main(['run', '--secret', 'PINNED=' + ID, '--secret-name', 'API_TOKEN=registry-read', '--', 'true'])
+                self.assertEqual(code, 1)
+                self.assertEqual(out.getvalue(), '')
+                self.assertIn(message, err.getvalue())
+                self.assertNotIn('synthetic-machine-token', err.getvalue())
+                self.assertEqual(fetch.call_count, 1)
+                self.assertEqual(fetch.call_args.args[0], ['/trusted/bws', 'project', 'list', '--output', 'json'])
+                launch.assert_not_called()
+
+    def test_duplicate_environment_binding_rejected_before_vault_access(self):
+        with patch.object(ops, 'credential_token') as token:
+            with self.assertRaises(ops.OperationError):
+                ops.run_script(['--secret', 'API_TOKEN=' + ID, '--secret-name', 'API_TOKEN=registry-read', '--', 'true'])
+            token.assert_not_called()
+
     def test_timeout_output_suppressed(self):
         out, err = io.StringIO(), io.StringIO()
         with patch.dict(os.environ, {}, clear=True), patch.object(ops, 'bws_executable', return_value='/trusted/bws'), patch.object(ops, 'credential_token', return_value='synthetic-machine-token'), patch.object(ops, 'run_captured', return_value=json.dumps({'id': ID, 'value': VALUE}).encode()), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

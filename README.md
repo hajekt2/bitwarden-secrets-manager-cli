@@ -40,11 +40,15 @@ export existing secrets and does not install an isolated credential service.
 ## Run any credential-consuming script
 
 ```bash
-scripts/with-bws-token.sh run --secret API_TOKEN=11111111-2222-3333-4444-555555555555 -- python3 /absolute/path/task.py
+scripts/with-bws-token.sh run --secret-name API_TOKEN=project/secret-name -- python3 /absolute/path/task.py
 ```
 
-The agent chooses the command and binds each needed secret UUID to an environment
-variable. No recipe, script allowlist, hash pin, version pin, or separate script
+The agent chooses the command and binds each needed secret by exact name or UUID.
+Use a bare name for a unique match or `PROJECT/NAME` to disambiguate. The wrapper
+resolves all names from metadata before fetching any values. Pass `--region eu`
+for EU name lookup with an EU-configured `bws`; the default is US. To pin an entry
+by ID, use `--secret API_TOKEN=11111111-2222-3333-4444-555555555555` instead.
+No recipe, script allowlist, hash pin, version pin, or separate script
 approval is required. Task authorization still applies to external and destructive
 actions. The machine-account token is never passed to the application.
 
